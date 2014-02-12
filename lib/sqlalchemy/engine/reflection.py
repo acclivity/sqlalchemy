@@ -1,5 +1,5 @@
 # engine/reflection.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -161,7 +161,7 @@ class Inspector(object):
         """Return all table names in referred to within a particular schema.
 
         The names are expected to be real tables only, not views.
-        Views are instead returned using the :meth:`.get_view_names`
+        Views are instead returned using the :meth:`.Inspector.get_view_names`
         method.
 
 
@@ -401,7 +401,7 @@ class Inspector(object):
          of the database connection.  For special quoting,
          use :class:`.quoted_name`.
 
-        .. versionadded:: 0.9.0
+        .. versionadded:: 0.8.4
 
         """
 
@@ -431,25 +431,25 @@ class Inspector(object):
         """
         dialect = self.bind.dialect
 
-        # table attributes we might need.
-        reflection_options = dict(
-            (k, table.kwargs.get(k))
-            for k in dialect.reflection_options if k in table.kwargs)
-
         schema = table.schema
         table_name = table.name
 
-        # apply table options
-        tbl_opts = self.get_table_options(table_name, schema, **table.kwargs)
-        if tbl_opts:
-            table.kwargs.update(tbl_opts)
+        # get table-level arguments that are specifically
+        # intended for reflection, e.g. oracle_resolve_synonyms.
+        # these are unconditionally passed to related Table
+        # objects
+        reflection_options = dict(
+            (k, table.dialect_kwargs.get(k))
+            for k in dialect.reflection_options
+            if k in table.dialect_kwargs
+        )
 
-        # table.kwargs will need to be passed to each reflection method.  Make
-        # sure keywords are strings.
-        tblkw = table.kwargs.copy()
-        for (k, v) in list(tblkw.items()):
-            del tblkw[k]
-            tblkw[str(k)] = v
+        # reflect table options, like mysql_engine
+        tbl_opts = self.get_table_options(table_name, schema, **table.dialect_kwargs)
+        if tbl_opts:
+            # add additional kwargs to the Table if the dialect
+            # returned them
+            table._validate_dialect_kwargs(tbl_opts)
 
         if util.py2k:
             if isinstance(schema, str):
@@ -457,11 +457,10 @@ class Inspector(object):
             if isinstance(table_name, str):
                 table_name = table_name.decode(dialect.encoding)
 
-        # columns
         found_table = False
         cols_by_orig_name = {}
 
-        for col_d in self.get_columns(table_name, schema, **tblkw):
+        for col_d in self.get_columns(table_name, schema, **table.dialect_kwargs):
             found_table = True
             orig_name = col_d['name']
 
@@ -474,12 +473,12 @@ class Inspector(object):
                 continue
 
             coltype = col_d['type']
-            col_kw = {
-                'nullable': col_d['nullable'],
-            }
-            for k in ('autoincrement', 'quote', 'info', 'key'):
-                if k in col_d:
-                    col_kw[k] = col_d[k]
+
+            col_kw = dict(
+                (k, col_d[k])
+                for k in ['nullable', 'autoincrement', 'quote', 'info', 'key']
+                if k in col_d
+            )
 
             colargs = []
             if col_d.get('default') is not None:
@@ -493,7 +492,7 @@ class Inspector(object):
                 )
 
             if 'sequence' in col_d:
-                # TODO: mssql, maxdb and sybase are using this.
+                # TODO: mssql and sybase are using this.
                 seq = col_d['sequence']
                 sequence = sa_schema.Sequence(seq['name'], 1, 1)
                 if 'start' in seq:
@@ -505,33 +504,29 @@ class Inspector(object):
             cols_by_orig_name[orig_name] = col = \
                         sa_schema.Column(name, coltype, *colargs, **col_kw)
 
+            if col.key in table.primary_key:
+                col.primary_key = True
             table.append_column(col)
 
         if not found_table:
             raise exc.NoSuchTableError(table.name)
 
-        # Primary keys
-        pk_cons = self.get_pk_constraint(table_name, schema, **tblkw)
+        pk_cons = self.get_pk_constraint(table_name, schema, **table.dialect_kwargs)
         if pk_cons:
             pk_cols = [
                 cols_by_orig_name[pk]
                 for pk in pk_cons['constrained_columns']
                 if pk in cols_by_orig_name and pk not in exclude_columns
             ]
-            pk_cols += [
-                pk
-                for pk in table.primary_key
-                if pk.key in exclude_columns
-            ]
-            primary_key_constraint = sa_schema.PrimaryKeyConstraint(
-                name=pk_cons.get('name'),
-                *pk_cols
-            )
 
-            table.append_constraint(primary_key_constraint)
+            # update pk constraint name
+            table.primary_key.name = pk_cons.get('name')
 
-        # Foreign keys
-        fkeys = self.get_foreign_keys(table_name, schema, **tblkw)
+            # tell the PKConstraint to re-initialize
+            # it's column collection
+            table.primary_key._reload(pk_cols)
+
+        fkeys = self.get_foreign_keys(table_name, schema, **table.dialect_kwargs)
         for fkey_d in fkeys:
             conname = fkey_d['name']
             # look for columns by orig name in cols_by_orig_name,
@@ -564,9 +559,14 @@ class Inspector(object):
                                 )
                 for column in referred_columns:
                     refspec.append(".".join([referred_table, column]))
+            if 'options' in fkey_d:
+                options = fkey_d['options']
+            else:
+                options = {}
             table.append_constraint(
                 sa_schema.ForeignKeyConstraint(constrained_columns, refspec,
-                                               conname, link_to_name=True))
+                                               conname, link_to_name=True,
+                                               **options))
         # Indexes
         indexes = self.get_indexes(table_name, schema)
         for index_d in indexes:

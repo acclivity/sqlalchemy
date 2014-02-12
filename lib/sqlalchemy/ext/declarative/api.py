@@ -1,5 +1,5 @@
 # ext/declarative/api.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -9,16 +9,18 @@
 from ...schema import Table, MetaData
 from ...orm import synonym as _orm_synonym, mapper,\
                                 comparable_property,\
-                                interfaces
+                                interfaces, properties
 from ...orm.util import polymorphic_union
 from ...orm.base import _mapper_or_none
+from ...util import compat
 from ... import exc
 import weakref
 
 from .base import _as_declarative, \
                 _declarative_constructor,\
-                _MapperConfig, _add_attribute
-
+                _DeferredMapperConfig, _add_attribute
+from .clsregistry import _class_resolver
+from . import clsregistry
 
 def instrument_declarative(cls, registry, metadata):
     """Given a class, configure the class declaratively,
@@ -174,16 +176,16 @@ def declarative_base(bind=None, metadata=None, mapper=None, cls=object,
     of the class.
 
     :param bind: An optional
-      :class:`~sqlalchemy.engine.base.Connectable`, will be assigned
-      the ``bind`` attribute on the :class:`~sqlalchemy.MetaData`
+      :class:`~sqlalchemy.engine.Connectable`, will be assigned
+      the ``bind`` attribute on the :class:`~sqlalchemy.schema.MetaData`
       instance.
 
     :param metadata:
-      An optional :class:`~sqlalchemy.MetaData` instance.  All
+      An optional :class:`~sqlalchemy.schema.MetaData` instance.  All
       :class:`~sqlalchemy.schema.Table` objects implicitly declared by
       subclasses of the base will share this MetaData.  A MetaData instance
       will be created if none is provided.  The
-      :class:`~sqlalchemy.MetaData` instance will be available via the
+      :class:`~sqlalchemy.schema.MetaData` instance will be available via the
       `metadata` attribute of the generated declarative base class.
 
     :param mapper:
@@ -253,7 +255,7 @@ def as_declarative(**kw):
         from sqlalchemy.ext.declarative import as_declarative
 
         @as_declarative()
-        class Base(object)
+        class Base(object):
             @declared_attr
             def __tablename__(cls):
                 return cls.__name__.lower()
@@ -286,7 +288,7 @@ class ConcreteBase(object):
     function automatically, against all tables mapped as a subclass
     to this class.   The function is called via the
     ``__declare_last__()`` function, which is essentially
-    a hook for the :func:`.MapperEvents.after_configured` event.
+    a hook for the :meth:`.after_configured` event.
 
     :class:`.ConcreteBase` produces a mapped
     table for the class itself.  Compare to :class:`.AbstractConcreteBase`,
@@ -323,7 +325,7 @@ class ConcreteBase(object):
          ), 'type', 'pjoin')
 
     @classmethod
-    def __declare_last__(cls):
+    def __declare_first__(cls):
         m = cls.__mapper__
         if m.with_polymorphic:
             return
@@ -341,7 +343,7 @@ class AbstractConcreteBase(ConcreteBase):
     function automatically, against all tables mapped as a subclass
     to this class.   The function is called via the
     ``__declare_last__()`` function, which is essentially
-    a hook for the :func:`.MapperEvents.after_configured` event.
+    a hook for the :meth:`.after_configured` event.
 
     :class:`.AbstractConcreteBase` does not produce a mapped
     table for the class itself.  Compare to :class:`.ConcreteBase`,
@@ -368,10 +370,11 @@ class AbstractConcreteBase(ConcreteBase):
     __abstract__ = True
 
     @classmethod
-    def __declare_last__(cls):
+    def __declare_first__(cls):
         if hasattr(cls, '__mapper__'):
             return
 
+        clsregistry.add_class(cls.__name__, cls)
         # can't rely on 'self_and_descendants' here
         # since technically an immediate subclass
         # might not be mapped, but a subclass
@@ -421,7 +424,7 @@ class DeferredReflection(object):
     Above, ``MyClass`` is not yet mapped.   After a series of
     classes have been defined in the above fashion, all tables
     can be reflected and mappings created using
-    :meth:`.DeferredReflection.prepare`::
+    :meth:`.prepare`::
 
         engine = create_engine("someengine://...")
         DeferredReflection.prepare(engine)
@@ -465,11 +468,30 @@ class DeferredReflection(object):
     def prepare(cls, engine):
         """Reflect all :class:`.Table` objects for all current
         :class:`.DeferredReflection` subclasses"""
-        to_map = [m for m in _MapperConfig.configs.values()
-                    if issubclass(m.cls, cls)]
+
+        to_map = _DeferredMapperConfig.classes_for_base(cls)
         for thingy in to_map:
             cls._sa_decl_prepare(thingy.local_table, engine)
             thingy.map()
+            mapper = thingy.cls.__mapper__
+            metadata = mapper.class_.metadata
+            for rel in mapper._props.values():
+                if isinstance(rel, properties.RelationshipProperty) and \
+                    rel.secondary is not None:
+                    if isinstance(rel.secondary, Table):
+                        cls._reflect_table(rel.secondary, engine)
+                    elif isinstance(rel.secondary, _class_resolver):
+                        rel.secondary._resolvers += (
+                            cls._sa_deferred_table_resolver(engine, metadata),
+                        )
+
+    @classmethod
+    def _sa_deferred_table_resolver(cls, engine, metadata):
+        def _resolve(key):
+            t1 = Table(key, metadata)
+            cls._reflect_table(t1, engine)
+            return t1
+        return _resolve
 
     @classmethod
     def _sa_decl_prepare(cls, local_table, engine):
@@ -478,10 +500,14 @@ class DeferredReflection(object):
         # will fill in db-loaded columns
         # into the existing Table object.
         if local_table is not None:
-            Table(local_table.name,
-                local_table.metadata,
-                extend_existing=True,
-                autoload_replace=False,
-                autoload=True,
-                autoload_with=engine,
-                schema=local_table.schema)
+            cls._reflect_table(local_table, engine)
+
+    @classmethod
+    def _reflect_table(cls, table, engine):
+        Table(table.name,
+            table.metadata,
+            extend_existing=True,
+            autoload_replace=False,
+            autoload=True,
+            autoload_with=engine,
+            schema=table.schema)

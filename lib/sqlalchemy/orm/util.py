@@ -1,5 +1,5 @@
 # orm/util.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -70,24 +70,43 @@ class CascadeOptions(frozenset):
         )
 
 
-def _validator_events(desc, key, validator, include_removes):
+def _validator_events(desc, key, validator, include_removes, include_backrefs):
     """Runs a validation method on an attribute value to be set or appended."""
+
+    if not include_backrefs:
+        def detect_is_backref(state, initiator):
+            impl = state.manager[key].impl
+            return initiator.impl is not impl
 
     if include_removes:
         def append(state, value, initiator):
-            return validator(state.obj(), key, value, False)
+            if include_backrefs or not detect_is_backref(state, initiator):
+                return validator(state.obj(), key, value, False)
+            else:
+                return value
 
         def set_(state, value, oldvalue, initiator):
-            return validator(state.obj(), key, value, False)
+            if include_backrefs or not detect_is_backref(state, initiator):
+                return validator(state.obj(), key, value, False)
+            else:
+                return value
 
         def remove(state, value, initiator):
-            validator(state.obj(), key, value, True)
+            if include_backrefs or not detect_is_backref(state, initiator):
+                validator(state.obj(), key, value, True)
+
     else:
         def append(state, value, initiator):
-            return validator(state.obj(), key, value)
+            if include_backrefs or not detect_is_backref(state, initiator):
+                return validator(state.obj(), key, value)
+            else:
+                return value
 
         def set_(state, value, oldvalue, initiator):
-            return validator(state.obj(), key, value)
+            if include_backrefs or not detect_is_backref(state, initiator):
+                return validator(state.obj(), key, value)
+            else:
+                return value
 
     event.listen(desc, 'append', append, raw=True, retval=True)
     event.listen(desc, 'set', set_, raw=True, retval=True)
@@ -159,31 +178,59 @@ def polymorphic_union(table_map, typecolname,
 
 
 def identity_key(*args, **kwargs):
-    """Get an identity key.
+    """Generate "identity key" tuples, as are used as keys in the
+    :attr:`.Session.identity_map` dictionary.
 
-    Valid call signatures:
+    This function has several call styles:
 
     * ``identity_key(class, ident)``
 
-      class
-          mapped class (must be a positional argument)
+      This form receives a mapped class and a primary key scalar or
+      tuple as an argument.
 
-      ident
-          primary key, if the key is composite this is a tuple
+      E.g.::
+
+        >>> identity_key(MyClass, (1, 2))
+        (<class '__main__.MyClass'>, (1, 2))
+
+      :param class: mapped class (must be a positional argument)
+      :param ident: primary key, may be a scalar or tuple argument.
 
 
     * ``identity_key(instance=instance)``
 
-      instance
-          object instance (must be given as a keyword arg)
+      This form will produce the identity key for a given instance.  The
+      instance need not be persistent, only that its primary key attributes
+      are populated (else the key will contain ``None`` for those missing
+      values).
+
+      E.g.::
+
+        >>> instance = MyClass(1, 2)
+        >>> identity_key(instance=instance)
+        (<class '__main__.MyClass'>, (1, 2))
+
+      In this form, the given instance is ultimately run though
+      :meth:`.Mapper.identity_key_from_instance`, which will have the
+      effect of performing a database check for the corresponding row
+      if the object is expired.
+
+      :param instance: object instance (must be given as a keyword arg)
 
     * ``identity_key(class, row=row)``
 
-      class
-          mapped class (must be a positional argument)
+      This form is similar to the class/tuple form, except is passed a
+      database result row as a :class:`.RowProxy` object.
 
-      row
-          result proxy row (must be given as a keyword arg)
+      E.g.::
+
+        >>> row = engine.execute("select * from table where a=1 and b=2").first()
+        >>> identity_key(MyClass, row=row)
+        (<class '__main__.MyClass'>, (1, 2))
+
+      :param class: mapped class (must be a positional argument)
+      :param row: :class:`.RowProxy` row returned by a :class:`.ResultProxy`
+       (must be given as a keyword arg)
 
     """
     if args:
@@ -331,8 +378,10 @@ class AliasedClass(object):
             else:
                 raise AttributeError(key)
 
-        if isinstance(attr, attributes.QueryableAttribute):
-            return _aliased_insp._adapt_prop(attr, key)
+        if isinstance(attr, PropComparator):
+            ret = attr.adapt_to_entity(_aliased_insp)
+            setattr(self, key, ret)
+            return ret
         elif hasattr(attr, 'func_code'):
             is_method = getattr(_aliased_insp._target, key, None)
             if is_method and is_method.__self__ is not None:
@@ -343,7 +392,8 @@ class AliasedClass(object):
             ret = attr.__get__(None, self)
             if isinstance(ret, PropComparator):
                 return ret.adapt_to_entity(_aliased_insp)
-            return ret
+            else:
+                return ret
         else:
             return attr
 
@@ -464,17 +514,6 @@ class AliasedInsp(_InspectionAttr):
                         'parententity': self.entity,
                         'parentmapper': self.mapper}
                     )
-
-    def _adapt_prop(self, existing, key):
-        comparator = existing.comparator.adapt_to_entity(self)
-        queryattr = attributes.QueryableAttribute(
-                                self.entity, key,
-                                impl=existing.impl,
-                                parententity=self,
-                                comparator=comparator)
-        setattr(self.entity, key, queryattr)
-        return queryattr
-
 
     def _entity_for_mapper(self, mapper):
         self_poly = self.with_polymorphic_mappers

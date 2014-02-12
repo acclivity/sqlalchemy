@@ -1,5 +1,5 @@
 # sql/sqltypes.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -12,7 +12,7 @@ import datetime as dt
 import codecs
 
 from .type_api import TypeEngine, TypeDecorator, to_instance
-from .elements import quoted_name
+from .elements import quoted_name, type_coerce
 from .default_comparator import _DefaultColumnComparator
 from .. import exc, util, processors
 from .base import _bind_or_error, SchemaEventTarget
@@ -119,7 +119,7 @@ class String(Concatenable, TypeEngine):
           unicode objects, this flag generally does not
           need to be set.  For columns that are explicitly
           intended to store non-ASCII data, the :class:`.Unicode`
-          or :class:`UnicodeText`
+          or :class:`.UnicodeText`
           types should be used regardless, which feature
           the same behavior of ``convert_unicode`` but
           also indicate an underlying column type that
@@ -154,6 +154,12 @@ class String(Concatenable, TypeEngine):
         self.unicode_error = unicode_error
         self._warn_on_bytestring = _warn_on_bytestring
 
+    def literal_processor(self, dialect):
+        def process(value):
+            value = value.replace("'", "''")
+            return "'%s'" % value
+        return process
+
     def bind_processor(self, dialect):
         if self.convert_unicode or dialect.convert_unicode:
             if dialect.supports_unicode_binds and \
@@ -186,27 +192,22 @@ class String(Concatenable, TypeEngine):
         wants_unicode = self.convert_unicode or dialect.convert_unicode
         needs_convert = wants_unicode and \
                         (dialect.returns_unicode_strings is not True or
-                        self.convert_unicode == 'force')
-
+                        self.convert_unicode in ('force', 'force_nocheck'))
+        needs_isinstance = (
+                                needs_convert and
+                                dialect.returns_unicode_strings and
+                                self.convert_unicode != 'force_nocheck'
+                            )
         if needs_convert:
             to_unicode = processors.to_unicode_processor_factory(
                                     dialect.encoding, self.unicode_error)
 
-            if dialect.returns_unicode_strings:
-                # we wouldn't be here unless convert_unicode='force'
-                # was specified, or the driver has erratic unicode-returning
-                # habits.  since we will be getting back unicode
-                # in most cases, we check for it (decode will fail).
-                def process(value):
-                    if isinstance(value, util.text_type):
-                        return value
-                    else:
-                        return to_unicode(value)
-                return process
+            if needs_isinstance:
+                return processors.to_conditional_unicode_processor_factory(
+                                    dialect.encoding, self.unicode_error)
             else:
-                # here, we assume that the object is not unicode,
-                # avoiding expensive isinstance() check.
-                return to_unicode
+                return processors.to_unicode_processor_factory(
+                                    dialect.encoding, self.unicode_error)
         else:
             return None
 
@@ -345,6 +346,11 @@ class Integer(_DateAffinity, TypeEngine):
     def python_type(self):
         return int
 
+    def literal_processor(self, dialect):
+        def process(value):
+            return str(value)
+        return process
+
     @util.memoized_property
     def _expression_adaptations(self):
         # TODO: need a dictionary object that will
@@ -398,51 +404,52 @@ class BigInteger(Integer):
     __visit_name__ = 'big_integer'
 
 
-class Numeric(_DateAffinity, TypeEngine):
-    """A type for fixed precision numbers.
 
-    Typically generates DECIMAL or NUMERIC.  Returns
-    ``decimal.Decimal`` objects by default, applying
-    conversion as needed.
+class Numeric(_DateAffinity, TypeEngine):
+    """A type for fixed precision numbers, such as ``NUMERIC`` or ``DECIMAL``.
+
+    This type returns Python ``decimal.Decimal`` objects by default, unless the
+    :paramref:`.Numeric.asdecimal` flag is set to False, in which case they
+    are coerced to Python ``float`` objects.
 
     .. note::
 
-       The `cdecimal <http://pypi.python.org/pypi/cdecimal/>`_ library
-       is a high performing alternative to Python's built-in
-       ``decimal.Decimal`` type, which performs very poorly in high volume
-       situations. SQLAlchemy 0.7 is tested against ``cdecimal`` and supports
-       it fully. The type is not necessarily supported by DBAPI
-       implementations however, most of which contain an import for plain
-       ``decimal`` in their source code, even though some such as psycopg2
-       provide hooks for alternate adapters. SQLAlchemy imports ``decimal``
-       globally as well.  The most straightforward and
-       foolproof way to use "cdecimal" given current DBAPI and Python support
-       is to patch it directly into sys.modules before anything else is
-       imported::
+        The :class:`.Numeric` type is designed to receive data from a database
+        type that is explicitly known to be a decimal type
+        (e.g. ``DECIMAL``, ``NUMERIC``, others) and not a floating point
+        type (e.g. ``FLOAT``, ``REAL``, others).
+        If the database column on the server is in fact a floating-point type
+        type, such as ``FLOAT`` or ``REAL``, use the :class:`.Float`
+        type or a subclass, otherwise numeric coercion between ``float``/``Decimal``
+        may or may not function as expected.
+
+    .. note::
+
+       The Python ``decimal.Decimal`` class is generally slow
+       performing; cPython 3.3 has now switched to use the `cdecimal
+       <http://pypi.python.org/pypi/cdecimal/>`_ library natively. For
+       older Python versions, the ``cdecimal`` library can be patched
+       into any application where it will replace the ``decimal``
+       library fully, however this needs to be applied globally and
+       before any other modules have been imported, as follows::
 
            import sys
            import cdecimal
            sys.modules["decimal"] = cdecimal
 
-       While the global patch is a little ugly, it's particularly
-       important to use just one decimal library at a time since
-       Python Decimal and cdecimal Decimal objects
-       are not currently compatible *with each other*::
-
-           >>> import cdecimal
-           >>> import decimal
-           >>> decimal.Decimal("10") == cdecimal.Decimal("10")
-           False
-
-       SQLAlchemy will provide more natural support of
-       cdecimal if and when it becomes a standard part of Python
-       installations and is supported by all DBAPIs.
+       Note that the ``cdecimal`` and ``decimal`` libraries are **not
+       compatible with each other**, so patching ``cdecimal`` at the
+       global level is the only way it can be used effectively with
+       various DBAPIs that hardcode to import the ``decimal`` library.
 
     """
 
     __visit_name__ = 'numeric'
 
-    def __init__(self, precision=None, scale=None, asdecimal=True):
+    _default_decimal_return_scale = 10
+
+    def __init__(self, precision=None, scale=None,
+                  decimal_return_scale=None, asdecimal=True):
         """
         Construct a Numeric.
 
@@ -456,6 +463,18 @@ class Numeric(_DateAffinity, TypeEngine):
           as floats.   Different DBAPIs send one or the other based on
           datatypes - the Numeric type will ensure that return values
           are one or the other across DBAPIs consistently.
+
+        :param decimal_return_scale: Default scale to use when converting
+         from floats to Python decimals.  Floating point values will typically
+         be much longer due to decimal inaccuracy, and most floating point
+         database types don't have a notion of "scale", so by default the
+         float type looks for the first ten decimal places when converting.
+         Specfiying this value will override that length.  Types which
+         do include an explicit ".scale" value, such as the base :class:`.Numeric`
+         as well as the MySQL float types, will use the value of ".scale"
+         as the default for decimal_return_scale, if not otherwise specified.
+
+         .. versionadded:: 0.9.0
 
         When using the ``Numeric`` type, care should be taken to ensure
         that the asdecimal setting is apppropriate for the DBAPI in use -
@@ -476,10 +495,25 @@ class Numeric(_DateAffinity, TypeEngine):
         """
         self.precision = precision
         self.scale = scale
+        self.decimal_return_scale = decimal_return_scale
         self.asdecimal = asdecimal
+
+    @property
+    def _effective_decimal_return_scale(self):
+        if self.decimal_return_scale is not None:
+            return self.decimal_return_scale
+        elif getattr(self, "scale", None) is not None:
+            return self.scale
+        else:
+            return self._default_decimal_return_scale
 
     def get_dbapi_type(self, dbapi):
         return dbapi.NUMBER
+
+    def literal_processor(self, dialect):
+        def process(value):
+            return str(value)
+        return process
 
     @property
     def python_type(self):
@@ -509,12 +543,10 @@ class Numeric(_DateAffinity, TypeEngine):
                           'storage.' % (dialect.name, dialect.driver))
 
                 # we're a "numeric", DBAPI returns floats, convert.
-                if self.scale is not None:
-                    return processors.to_decimal_processor_factory(
-                                decimal.Decimal, self.scale)
-                else:
-                    return processors.to_decimal_processor_factory(
-                                decimal.Decimal)
+                return processors.to_decimal_processor_factory(
+                            decimal.Decimal,
+                            self.scale if self.scale is not None
+                            else self._default_decimal_return_scale)
         else:
             if dialect.supports_native_decimal:
                 return processors.to_float
@@ -549,10 +581,22 @@ class Numeric(_DateAffinity, TypeEngine):
 
 
 class Float(Numeric):
-    """A type for ``float`` numbers.
+    """Type representing floating point types, such as ``FLOAT`` or ``REAL``.
 
-    Returns Python ``float`` objects by default, applying
-    conversion as needed.
+    This type returns Python ``float`` objects by default, unless the
+    :paramref:`.Float.asdecimal` flag is set to True, in which case they
+    are coerced to ``decimal.Decimal`` objects.
+
+    .. note::
+
+        The :class:`.Float` type is designed to receive data from a database
+        type that is explicitly known to be a floating point type
+        (e.g. ``FLOAT``, ``REAL``, others)
+        and not a decimal type (e.g. ``DECIMAL``, ``NUMERIC``, others).
+        If the database column on the server is in fact a Numeric
+        type, such as ``DECIMAL`` or ``NUMERIC``, use the :class:`.Numeric`
+        type or a subclass, otherwise numeric coercion between ``float``/``Decimal``
+        may or may not function as expected.
 
     """
 
@@ -560,7 +604,8 @@ class Float(Numeric):
 
     scale = None
 
-    def __init__(self, precision=None, asdecimal=False, **kwargs):
+    def __init__(self, precision=None, asdecimal=False,
+                        decimal_return_scale=None, **kwargs):
         """
         Construct a Float.
 
@@ -571,6 +616,17 @@ class Float(Numeric):
           defaults to ``False``.   Note that setting this flag to ``True``
           results in floating point conversion.
 
+        :param decimal_return_scale: Default scale to use when converting
+         from floats to Python decimals.  Floating point values will typically
+         be much longer due to decimal inaccuracy, and most floating point
+         database types don't have a notion of "scale", so by default the
+         float type looks for the first ten decimal places when converting.
+         Specfiying this value will override that length.  Note that the
+         MySQL float types, which do include "scale", will use "scale"
+         as the default for decimal_return_scale, if not otherwise specified.
+
+         .. versionadded:: 0.9.0
+
         :param \**kwargs: deprecated.  Additional arguments here are ignored
          by the default :class:`.Float` type.  For database specific
          floats that support additional arguments, see that dialect's
@@ -580,13 +636,16 @@ class Float(Numeric):
         """
         self.precision = precision
         self.asdecimal = asdecimal
+        self.decimal_return_scale = decimal_return_scale
         if kwargs:
             util.warn_deprecated("Additional keyword arguments "
                                 "passed to Float ignored.")
 
     def result_processor(self, dialect, coltype):
         if self.asdecimal:
-            return processors.to_decimal_processor_factory(decimal.Decimal)
+            return processors.to_decimal_processor_factory(
+                                    decimal.Decimal,
+                                    self._effective_decimal_return_scale)
         else:
             return None
 
@@ -629,9 +688,9 @@ class DateTime(_DateAffinity, TypeEngine):
         """Construct a new :class:`.DateTime`.
 
         :param timezone: boolean.  If True, and supported by the
-        backend, will produce 'TIMESTAMP WITH TIMEZONE'. For backends
-        that don't support timezone aware timestamps, has no
-        effect.
+         backend, will produce 'TIMESTAMP WITH TIMEZONE'. For backends
+         that don't support timezone aware timestamps, has no
+         effect.
 
         """
         self.timezone = timezone
@@ -728,6 +787,12 @@ class _Binary(TypeEngine):
     def __init__(self, length=None):
         self.length = length
 
+    def literal_processor(self, dialect):
+        def process(value):
+            value = value.decode(dialect.encoding).replace("'", "''")
+            return "'%s'" % value
+        return process
+
     @property
     def python_type(self):
         return util.binary_type
@@ -735,6 +800,9 @@ class _Binary(TypeEngine):
     # Python 3 - sqlite3 doesn't need the `Binary` conversion
     # here, though pg8000 does to indicate "bytea"
     def bind_processor(self, dialect):
+        if dialect.dbapi is None:
+            return None
+
         DBAPIBinary = dialect.dbapi.Binary
 
         def process(value):
@@ -840,15 +908,15 @@ class SchemaType(SchemaEventTarget):
 
     """
 
-    def __init__(self, **kw):
-        name = kw.pop('name', None)
+    def __init__(self, name=None, schema=None, metadata=None,
+                inherit_schema=False, quote=None):
         if name is not None:
-            self.name = quoted_name(name, kw.pop('quote', None))
+            self.name = quoted_name(name, quote)
         else:
             self.name = None
-        self.schema = kw.pop('schema', None)
-        self.metadata = kw.pop('metadata', None)
-        self.inherit_schema = kw.pop('inherit_schema', False)
+        self.schema = schema
+        self.metadata = metadata
+        self.inherit_schema = inherit_schema
         if self.metadata:
             event.listen(
                 self.metadata,
@@ -1044,10 +1112,9 @@ class Enum(String, SchemaType):
         SchemaType.__init__(self, **kw)
 
     def __repr__(self):
-        return util.generic_repr(self, [
-                        ("native_enum", True),
-                        ("name", None)
-                    ])
+        return util.generic_repr(self,
+              to_inspect=[Enum, SchemaType],
+          )
 
     def _should_create_constraint(self, compiler):
         return not self.native_enum or \
@@ -1059,7 +1126,7 @@ class Enum(String, SchemaType):
             SchemaType._set_table(self, column, table)
 
         e = schema.CheckConstraint(
-                        column.in_(self.enums),
+                        type_coerce(column, self).in_(self.enums),
                         name=self.name,
                         _create_rule=util.portable_instancemethod(
                                         self._should_create_constraint)
@@ -1196,7 +1263,7 @@ class Boolean(TypeEngine, SchemaType):
             return
 
         e = schema.CheckConstraint(
-                        column.in_([0, 1]),
+                        type_coerce(column, self).in_([0, 1]),
                         name=self.name,
                         _create_rule=util.portable_instancemethod(
                                     self._should_create_constraint)
@@ -1490,7 +1557,7 @@ class NullType(TypeEngine):
     The :class:`.NullType` can be used within SQL expression invocation
     without issue, it just has no behavior either at the expression construction
     level or at the bind-parameter/result processing level.  :class:`.NullType`
-    will result in a :class:`.CompileException` if the compiler is asked to render
+    will result in a :exc:`.CompileError` if the compiler is asked to render
     the type itself, such as if it is used in a :func:`.cast` operation
     or within a schema creation operation such as that invoked by
     :meth:`.MetaData.create_all` or the :class:`.CreateTable` construct.
@@ -1499,6 +1566,11 @@ class NullType(TypeEngine):
     __visit_name__ = 'null'
 
     _isnull = True
+
+    def literal_processor(self, dialect):
+        def process(value):
+            return "NULL"
+        return process
 
     class Comparator(TypeEngine.Comparator):
         def _adapt_expression(self, op, other_comparator):

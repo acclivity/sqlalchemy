@@ -1,5 +1,5 @@
 # mysql/cymysql.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -13,6 +13,7 @@
     :url: https://github.com/nakagami/CyMySQL
 
 """
+import re
 
 from .mysqldb import MySQLDialect_mysqldb
 from .base import (BIT, MySQLDialect)
@@ -51,6 +52,20 @@ class MySQLDialect_cymysql(MySQLDialect_mysqldb):
     @classmethod
     def dbapi(cls):
         return __import__('cymysql')
+
+    def _get_server_version_info(self, connection):
+        dbapi_con = connection.connection
+        version = []
+        r = re.compile('[.\-]')
+        for n in r.split(dbapi_con.server_version):
+            try:
+                version.append(int(n))
+            except ValueError:
+                version.append(n)
+        return tuple(version)
+
+    def _detect_charset(self, connection):
+        return connection.connection.charset
 
     def _extract_error_code(self, exception):
         return exception.errno

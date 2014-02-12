@@ -18,7 +18,7 @@ import os
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 sys.path.insert(0, os.path.abspath('../../lib'))
-sys.path.insert(0, os.path.abspath('../../examples'))
+sys.path.insert(0, os.path.abspath('../..')) # examples
 sys.path.insert(0, os.path.abspath('.'))
 
 import sqlalchemy
@@ -33,11 +33,14 @@ import sqlalchemy
 
 extensions = [
             'sphinx.ext.autodoc',
+            'sphinx.ext.intersphinx',
                 'builder.autodoc_mods',
-                'builder.changelog',
+                'changelog',
+                'sphinx_paramlinks',
                 'builder.dialect_info',
                 'builder.mako',
                 'builder.sqlformatter',
+                'builder.viewsource',
             ]
 
 # Add any paths that contain templates here, relative to this directory.
@@ -62,7 +65,13 @@ changelog_inner_tag_sort = ["feature", "bug", "moved", "changed", "removed"]
 
 # how to render changelog links
 changelog_render_ticket = "http://www.sqlalchemy.org/trac/ticket/%s"
-changelog_render_pullreq = "https://bitbucket.org/sqlalchemy/sqlalchemy/pull-request/%s"
+
+changelog_render_pullreq = {
+    "bitbucket": "https://bitbucket.org/zzzeek/sqlalchemy/pull-request/%s",
+    "default": "https://bitbucket.org/zzzeek/sqlalchemy/pull-request/%s",
+    "github": "https://github.com/zzzeek/sqlalchemy/pull/%s",
+}
+
 changelog_render_changeset = "http://www.sqlalchemy.org/trac/changeset/%s"
 
 
@@ -74,7 +83,7 @@ master_doc = 'contents'
 
 # General information about the project.
 project = u'SQLAlchemy'
-copyright = u'2007-2013, the SQLAlchemy authors and contributors'
+copyright = u'2007-2014, the SQLAlchemy authors and contributors'
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -83,9 +92,9 @@ copyright = u'2007-2013, the SQLAlchemy authors and contributors'
 # The short X.Y version.
 version = "0.9"
 # The full version, including alpha/beta/rc tags.
-release = "0.9.0"
+release = "0.9.2"
 
-release_date = "(not released)"
+release_date = "February 2, 2014"
 
 site_base = "http://www.sqlalchemy.org"
 
@@ -280,7 +289,7 @@ man_pages = [
 epub_title = u'SQLAlchemy'
 epub_author = u'SQLAlchemy authors'
 epub_publisher = u'SQLAlchemy authors'
-epub_copyright = u'2013, SQLAlchemy authors'
+epub_copyright = u'2007-2014, SQLAlchemy authors'
 
 # The language of the text. It defaults to the language option
 # or en if the language is not set.
@@ -312,3 +321,7 @@ epub_copyright = u'2013, SQLAlchemy authors'
 
 # Allow duplicate toc entries.
 #epub_tocdup = True
+
+intersphinx_mapping = {
+    'alembic': ('http://alembic.readthedocs.org/en/latest/', None),
+}

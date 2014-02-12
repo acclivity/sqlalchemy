@@ -1,5 +1,5 @@
 # sql/ddl.py
-# Copyright (C) 2009-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2009-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -62,6 +62,9 @@ class DDLElement(Executable, _DDLCompiles):
     on = None
     dialect = None
     callable_ = None
+
+    def _execute_on_connection(self, connection, multiparams, params):
+        return connection._execute_ddl(self, multiparams, params)
 
     def execute(self, bind=None, target=None):
         """Execute this DDL immediately.
@@ -192,7 +195,7 @@ class DDLElement(Executable, _DDLCompiles):
           If the callable returns a true value, the DDL statement will be
           executed.
 
-        :param state: any value which will be passed to the callable_
+        :param state: any value which will be passed to the callable\_
           as the ``state`` keyword argument.
 
         .. seealso::

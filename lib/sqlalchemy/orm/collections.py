@@ -1,5 +1,5 @@
 # orm/collections.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -1160,6 +1160,15 @@ def _list_decorators():
             return item
         _tidy(pop)
         return pop
+
+    if not util.py2k:
+        def clear(fn):
+            def clear(self, index=-1):
+                for item in self:
+                    __del(self, item)
+                fn(self)
+            _tidy(clear)
+            return clear
 
     # __imul__ : not wrapping this.  all members of the collection are already
     # present, so no need to fire appends... wrapping it with an explicit

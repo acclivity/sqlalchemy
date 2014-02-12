@@ -1,5 +1,5 @@
 # oracle/base.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -168,9 +168,10 @@ Synonym/DBLINK Reflection
 -------------------------
 
 When using reflection with Table objects, the dialect can optionally search for tables
-indicated by synonyms that reference DBLINK-ed tables by passing the flag
-oracle_resolve_synonyms=True as a keyword argument to the Table construct.  If DBLINK
-is not in use this flag should be left off.
+indicated by synonyms, either in local or remote schemas or accessed over DBLINK,
+by passing the flag oracle_resolve_synonyms=True as a
+keyword argument to the Table construct.   If synonyms are not in use
+this flag should be left off.
 
 """
 
@@ -180,7 +181,7 @@ from sqlalchemy import util, sql
 from sqlalchemy.engine import default, base, reflection
 from sqlalchemy.sql import compiler, visitors, expression
 from sqlalchemy.sql import operators as sql_operators, functions as sql_functions
-from sqlalchemy import types as sqltypes
+from sqlalchemy import types as sqltypes, schema as sa_schema
 from sqlalchemy.types import VARCHAR, NVARCHAR, CHAR, DATE, DATETIME, \
                 BLOB, CLOB, TIMESTAMP, FLOAT
 
@@ -397,7 +398,9 @@ class OracleTypeCompiler(compiler.GenericTypeCompiler):
         return self._visit_varchar(type_, '', '')
 
     def _visit_varchar(self, type_, n, num):
-        if not n and self.dialect._supports_char_length:
+        if not type_.length:
+            return "%(n)sVARCHAR%(two)s" % {'two': num, 'n': n}
+        elif not n and self.dialect._supports_char_length:
             varchar = "VARCHAR%(two)s(%(length)s CHAR)"
             return varchar % {'length': type_.length, 'two': num}
         else:
@@ -629,7 +632,7 @@ class OracleCompiler(compiler.SQLCompiler):
 
                 # If needed, add the ora_rn, and wrap again with offset.
                 if select._offset is None:
-                    limitselect.for_update = select.for_update
+                    limitselect._for_update_arg = select._for_update_arg
                     select = limitselect
                 else:
                     limitselect = limitselect.column(
@@ -648,7 +651,7 @@ class OracleCompiler(compiler.SQLCompiler):
                     offsetselect.append_whereclause(
                              sql.literal_column("ora_rn") > offset_value)
 
-                    offsetselect.for_update = select.for_update
+                    offsetselect._for_update_arg = select._for_update_arg
                     select = offsetselect
 
         kwargs['iswrapper'] = getattr(select, '_is_wrapper', False)
@@ -660,10 +663,19 @@ class OracleCompiler(compiler.SQLCompiler):
     def for_update_clause(self, select):
         if self.is_subquery():
             return ""
-        elif select.for_update == "nowait":
-            return " FOR UPDATE NOWAIT"
-        else:
-            return super(OracleCompiler, self).for_update_clause(select)
+
+        tmp = ' FOR UPDATE'
+
+        if select._for_update_arg.of:
+            tmp += ' OF ' + ', '.join(
+                                    self.process(elem) for elem in
+                                    select._for_update_arg.of
+                                )
+
+        if select._for_update_arg.nowait:
+            tmp += " NOWAIT"
+
+        return tmp
 
 
 class OracleDDLCompiler(compiler.DDLCompiler):
@@ -741,6 +753,10 @@ class OracleDialect(default.DefaultDialect):
     execution_ctx_cls = OracleExecutionContext
 
     reflection_options = ('oracle_resolve_synonyms', )
+
+    construct_arguments = [
+        (sa_schema.Table, {"resolve_synonyms": False})
+    ]
 
     def __init__(self,
                 use_ansi=True,
@@ -834,14 +850,15 @@ class OracleDialect(default.DefaultDialect):
         returns the actual name, owner, dblink name, and synonym name if found.
         """
 
-        q = "SELECT owner, table_owner, table_name, db_link, synonym_name FROM all_synonyms WHERE "
+        q = "SELECT owner, table_owner, table_name, db_link, "\
+                    "synonym_name FROM all_synonyms WHERE "
         clauses = []
         params = {}
         if desired_synonym:
             clauses.append("synonym_name = :synonym_name")
             params['synonym_name'] = desired_synonym
         if desired_owner:
-            clauses.append("table_owner = :desired_owner")
+            clauses.append("owner = :desired_owner")
             params['desired_owner'] = desired_owner
         if desired_table:
             clauses.append("table_name = :tname")

@@ -12,15 +12,14 @@ API Reference
     :members: _parents, coerce
 
 .. autoclass:: Mutable
-     
     :members:
+    :inherited-members:
+    :private-members:
 
 .. autoclass:: MutableComposite
-     
     :members:
 
 .. autoclass:: MutableDict
-	 
 	:members:
 
 

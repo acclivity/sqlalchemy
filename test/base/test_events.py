@@ -311,6 +311,26 @@ class LegacySignatureTest(fixtures.TestBase):
             canary(x, y, kw)
         self._test_legacy_accept_kw(inst, canary)
 
+    def test_legacy_accept_partial(self):
+        canary = Mock()
+        def evt(a, x, y, **kw):
+            canary(a, x, y, **kw)
+        from functools import partial
+        evt_partial = partial(evt, 5)
+        target = self.TargetOne()
+        event.listen(target, "event_four", evt_partial)
+        # can't do legacy accept on a partial; we can't inspect it
+        assert_raises(
+            TypeError,
+            target.dispatch.event_four, 4, 5, 6, 7, foo="bar"
+        )
+        target.dispatch.event_four(4, 5, foo="bar")
+        eq_(
+            canary.mock_calls,
+            [call(5, 4, 5, foo="bar")]
+        )
+
+
     def _test_legacy_accept_kw(self, target, canary):
         target.dispatch.event_four(4, 5, 6, 7, foo="bar")
 
@@ -965,6 +985,32 @@ class RemovalTest(fixtures.TestBase):
         t1.dispatch.event_two("y")
 
         eq_(m1.mock_calls, [call("x")])
+
+    def test_instance(self):
+        Target = self._fixture()
+
+        class Foo(object):
+            def __init__(self):
+                self.mock = Mock()
+
+            def evt(self, arg):
+                self.mock(arg)
+
+        f1 = Foo()
+        f2 = Foo()
+
+        event.listen(Target, "event_one", f1.evt)
+        event.listen(Target, "event_one", f2.evt)
+
+        t1 = Target()
+        t1.dispatch.event_one("x")
+
+        event.remove(Target, "event_one", f1.evt)
+
+        t1.dispatch.event_one("y")
+
+        eq_(f1.mock.mock_calls, [call("x")])
+        eq_(f2.mock.mock_calls, [call("x"), call("y")])
 
     def test_propagate(self):
         Target = self._fixture()

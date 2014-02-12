@@ -1,5 +1,5 @@
 # orm/attributes.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -23,7 +23,7 @@ from .base import PASSIVE_NO_RESULT, ATTR_WAS_SET, ATTR_EMPTY, NO_VALUE,\
             NEVER_SET, NO_CHANGE, CALLABLES_OK, SQL_OK, RELATED_OBJECT_OK,\
             INIT_OK, NON_PERSISTENT_OK, LOAD_AGAINST_COMMITTED, PASSIVE_OFF,\
             PASSIVE_RETURN_NEVER_SET, PASSIVE_NO_INITIALIZE, PASSIVE_NO_FETCH,\
-            PASSIVE_NO_FETCH_RELATED, PASSIVE_ONLY_PERSISTENT
+            PASSIVE_NO_FETCH_RELATED, PASSIVE_ONLY_PERSISTENT, NO_AUTOFLUSH
 from .base import state_str, instance_str
 
 @inspection._self_inspects
@@ -143,6 +143,18 @@ class QueryableAttribute(interfaces._MappedAttribute,
     def __clause_element__(self):
         return self.comparator.__clause_element__()
 
+    def _query_clause_element(self):
+        """like __clause_element__(), but called specifically
+        by :class:`.Query` to allow special behavior."""
+
+        return self.comparator._query_clause_element()
+
+    def adapt_to_entity(self, adapt_to_entity):
+        assert not self._of_type
+        return self.__class__(adapt_to_entity.entity, self.key, impl=self.impl,
+                           comparator=self.comparator.adapt_to_entity(adapt_to_entity),
+                           parententity=adapt_to_entity)
+
     def of_type(self, cls):
         return QueryableAttribute(
                     self.class_,
@@ -153,7 +165,7 @@ class QueryableAttribute(interfaces._MappedAttribute,
                     of_type=cls)
 
     def label(self, name):
-        return self.__clause_element__().label(name)
+        return self._query_clause_element().label(name)
 
     def operate(self, op, *other, **kwargs):
         return op(self.comparator, *other, **kwargs)
@@ -264,7 +276,7 @@ def create_proxied_attribute(descriptor):
             return self._comparator
 
         def adapt_to_entity(self, adapt_to_entity):
-            return self.__class__(self.class_, self.key, self.descriptor,
+            return self.__class__(adapt_to_entity.entity, self.key, self.descriptor,
                                        self._comparator,
                                        adapt_to_entity)
 
@@ -343,12 +355,6 @@ class Event(object):
         self.op = op
         self.parent_token = self.impl.parent_token
 
-    @classmethod
-    def _token_gen(self, op):
-        @util.memoized_property
-        def gen(self):
-            return Event(self, op)
-        return gen
 
     @property
     def key(self):
@@ -364,6 +370,7 @@ class AttributeImpl(object):
                     callable_, dispatch, trackparent=False, extension=None,
                     compare_function=None, active_history=False,
                     parent_token=None, expire_missing=True,
+                    send_modified_events=True,
                     **kwargs):
         """Construct an AttributeImpl.
 
@@ -407,6 +414,10 @@ class AttributeImpl(object):
           during state.expire_attributes(None), if no value is present
           for this key.
 
+        send_modified_events
+          if False, the InstanceState._modified_event method will have no effect;
+          this means the attribute will never show up as changed in a
+          history entry.
         """
         self.class_ = class_
         self.key = key
@@ -414,6 +425,7 @@ class AttributeImpl(object):
         self.dispatch = dispatch
         self.trackparent = trackparent
         self.parent_token = parent_token or self
+        self.send_modified_events = send_modified_events
         if compare_function is None:
             self.is_equal = operator.eq
         else:
@@ -546,7 +558,6 @@ class AttributeImpl(object):
 
     def get(self, state, dict_, passive=PASSIVE_OFF):
         """Retrieve a value from the given object.
-
         If a callable is assembled on this object's attribute, and
         passive is False, the callable will be executed and the
         resulting value will be set as the new value for this attribute.
@@ -646,8 +657,16 @@ class ScalarAttributeImpl(AttributeImpl):
         del dict_[self.key]
 
     def get_history(self, state, dict_, passive=PASSIVE_OFF):
-        return History.from_scalar_attribute(
-            self, state, dict_.get(self.key, NO_VALUE))
+        if self.key in dict_:
+            return History.from_scalar_attribute(self, state, dict_[self.key])
+        else:
+            if passive & INIT_OK:
+                passive ^= INIT_OK
+            current = self.get(state, dict_, passive=passive)
+            if current is PASSIVE_NO_RESULT:
+                return HISTORY_BLANK
+            else:
+                return History.from_scalar_attribute(self, state, current)
 
     def set(self, state, dict_, value, initiator,
                 passive=PASSIVE_OFF, check_old=None, pop=False):
@@ -662,8 +681,17 @@ class ScalarAttributeImpl(AttributeImpl):
         state._modified_event(dict_, self, old)
         dict_[self.key] = value
 
-    _replace_token = _append_token = Event._token_gen(OP_REPLACE)
-    _remove_token = Event._token_gen(OP_REMOVE)
+    @util.memoized_property
+    def _replace_token(self):
+        return Event(self, OP_REPLACE)
+
+    @util.memoized_property
+    def _append_token(self):
+        return Event(self, OP_REPLACE)
+
+    @util.memoized_property
+    def _remove_token(self):
+        return Event(self, OP_REMOVE)
 
     def fire_replace_event(self, state, dict_, value, previous, initiator):
         for fn in self.dispatch.set:
@@ -733,7 +761,7 @@ class ScalarObjectAttributeImpl(ScalarAttributeImpl):
 
         """
         if self.dispatch._active_history:
-            old = self.get(state, dict_, passive=PASSIVE_ONLY_PERSISTENT)
+            old = self.get(state, dict_, passive=PASSIVE_ONLY_PERSISTENT | NO_AUTOFLUSH)
         else:
             old = self.get(state, dict_, passive=PASSIVE_NO_FETCH)
 
@@ -854,8 +882,13 @@ class CollectionAttributeImpl(AttributeImpl):
 
         return [(instance_state(o), o) for o in current]
 
-    _append_token = Event._token_gen(OP_APPEND)
-    _remove_token = Event._token_gen(OP_REMOVE)
+    @util.memoized_property
+    def _append_token(self):
+        return Event(self, OP_APPEND)
+
+    @util.memoized_property
+    def _remove_token(self):
+        return Event(self, OP_REMOVE)
 
     def fire_append_event(self, state, dict_, value, initiator):
         for fn in self.dispatch.append:
@@ -1220,7 +1253,7 @@ class History(History):
         original = state.committed_state.get(attribute.key, _NO_HISTORY)
 
         if original is _NO_HISTORY:
-            if current is NO_VALUE:
+            if current is NEVER_SET:
                 return cls((), (), ())
             else:
                 return cls((), [current], ())
@@ -1237,7 +1270,7 @@ class History(History):
                 deleted = ()
             else:
                 deleted = [original]
-            if current is NO_VALUE:
+            if current is NEVER_SET:
                 return cls((), (), deleted)
             else:
                 return cls([current], (), deleted)

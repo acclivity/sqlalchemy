@@ -1,5 +1,5 @@
 # engine/result.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -12,6 +12,7 @@ and :class:`.RowProxy."""
 from .. import exc, util
 from ..sql import expression, sqltypes
 import collections
+import operator
 
 # This reconstructor is necessary so that pickles with the C extension or
 # without use the same Binary format.
@@ -125,11 +126,28 @@ class RowProxy(BaseRowProxy):
 
     __hash__ = None
 
+    def _op(self, other, op):
+        return op(tuple(self), tuple(other)) \
+            if isinstance(other, RowProxy) \
+            else op(tuple(self), other)
+
+    def __lt__(self, other):
+        return self._op(other, operator.lt)
+
+    def __le__(self, other):
+        return self._op(other, operator.le)
+
+    def __ge__(self, other):
+        return self._op(other, operator.ge)
+
+    def __gt__(self, other):
+        return self._op(other, operator.gt)
+
     def __eq__(self, other):
-        return other is self or other == tuple(self)
+        return self._op(other, operator.eq)
 
     def __ne__(self, other):
-        return not self.__eq__(other)
+        return self._op(other, operator.ne)
 
     def __repr__(self):
         return repr(tuple(self))
@@ -624,9 +642,17 @@ class ResultProxy(object):
     @property
     def returned_defaults(self):
         """Return the values of default columns that were fetched using
-        the ``returned_defaults`` feature.
+        the :meth:`.ValuesBase.return_defaults` feature.
+
+        The value is an instance of :class:`.RowProxy`, or ``None``
+        if :meth:`.ValuesBase.return_defaults` was not used or if the
+        backend does not support RETURNING.
 
         .. versionadded:: 0.9.0
+
+        .. seealso::
+
+            :meth:`.ValuesBase.return_defaults`
 
         """
         return self.context.returned_defaults

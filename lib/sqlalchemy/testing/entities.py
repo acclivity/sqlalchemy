@@ -1,3 +1,9 @@
+# testing/entities.py
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
+#
+# This module is part of SQLAlchemy and is released under
+# the MIT License: http://www.opensource.org/licenses/mit-license.php
+
 import sqlalchemy as sa
 from sqlalchemy import exc as sa_exc
 
@@ -79,8 +85,12 @@ class ComparableEntity(BasicEntity):
                     return False
 
                 if hasattr(value, '__iter__'):
-                    if list(value) != list(battr):
-                        return False
+                    if hasattr(value, '__getitem__') and not hasattr(value, 'keys'):
+                        if list(value) != list(battr):
+                            return False
+                    else:
+                        if set(value) != set(battr):
+                            return False
                 else:
                     if value is not None and value != battr:
                         return False

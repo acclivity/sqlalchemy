@@ -1,5 +1,5 @@
 # engine/interfaces.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -193,19 +193,21 @@ class Dialect(object):
 
         pass
 
-    def reflecttable(self, connection, table, include_columns=None):
+    def reflecttable(self, connection, table, include_columns, exclude_columns):
         """Load table description from the database.
 
         Given a :class:`.Connection` and a
         :class:`~sqlalchemy.schema.Table` object, reflect its columns and
-        properties from the database.  If include_columns (a list or
-        set) is specified, limit the autoload to the given column
-        names.
+        properties from the database.
 
-        The default implementation uses the
-        :class:`~sqlalchemy.engine.reflection.Inspector` interface to
-        provide the output, building upon the granular table/column/
-        constraint etc. methods of :class:`.Dialect`.
+        The implementation of this method is provided by
+        :meth:`.DefaultDialect.reflecttable`, which makes use of
+        :class:`.Inspector` to retrieve column information.
+
+        Dialects should **not** seek to implement this method, and should
+        instead implement individual schema inspection operations such as
+        :meth:`.Dialect.get_columns`, :meth:`.Dialect.get_pk_constraint`,
+        etc.
 
         """
 
@@ -248,7 +250,7 @@ class Dialect(object):
 
         Deprecated.  This method is only called by the default
         implementation of :meth:`.Dialect.get_pk_constraint`.  Dialects should
-        instead implement this method directly.
+        instead implement the :meth:`.Dialect.get_pk_constraint` method directly.
 
         """
 
@@ -340,7 +342,7 @@ class Dialect(object):
 
         raise NotImplementedError()
 
-    def get_unique_constraints(self, table_name, schema=None, **kw):
+    def get_unique_constraints(self, connection, table_name, schema=None, **kw):
         """Return information about unique constraints in `table_name`.
 
         Given a string `table_name` and an optional string `schema`, return
@@ -810,7 +812,8 @@ class Connectable(object):
                      "object directly, i.e. :meth:`.Table.create`, "
                      ":meth:`.Index.create`, :meth:`.MetaData.create_all`")
     def create(self, entity, **kwargs):
-        """Emit CREATE statements for the given schema entity."""
+        """Emit CREATE statements for the given schema entity.
+        """
 
         raise NotImplementedError()
 
@@ -819,7 +822,8 @@ class Connectable(object):
                      "object directly, i.e. :meth:`.Table.drop`, "
                      ":meth:`.Index.drop`, :meth:`.MetaData.drop_all`")
     def drop(self, entity, **kwargs):
-        """Emit DROP statements for the given schema entity."""
+        """Emit DROP statements for the given schema entity.
+        """
 
         raise NotImplementedError()
 

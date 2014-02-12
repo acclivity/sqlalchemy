@@ -66,11 +66,14 @@ used to construct any kind of typed SQL expression.
 .. autoclass:: BinaryExpression
    :members:
 
-   :inherited-members:
-
 .. autoclass:: BindParameter
    :members:
-   :inherited-members:
+
+.. autoclass:: Case
+   :members:
+
+.. autoclass:: Cast
+   :members:
 
 .. autoclass:: ClauseElement
    :members:
@@ -82,7 +85,6 @@ used to construct any kind of typed SQL expression.
 
 .. autoclass:: ColumnClause
    :members:
-   :inherited-members:
 
 .. autoclass:: ColumnCollection
    :members:
@@ -91,12 +93,36 @@ used to construct any kind of typed SQL expression.
 .. autoclass:: ColumnElement
    :members:
    :inherited-members:
+   :undoc-members:
 
 .. autoclass:: sqlalchemy.sql.operators.ColumnOperators
    :members:
    :special-members:
    :inherited-members:
 
+.. autoclass:: Extract
+   :members:
+
+.. autoclass:: sqlalchemy.sql.elements.False_
+   :members:
+
+.. autoclass:: Label
+   :members:
+
+.. autoclass:: sqlalchemy.sql.elements.Null
+   :members:
+
+.. autoclass:: Over
+   :members:
+
+.. autoclass:: TextClause
+   :members:
+
+.. autoclass:: Tuple
+   :members:
+
+.. autoclass:: sqlalchemy.sql.elements.True_
+   :members:
 
 .. autoclass:: sqlalchemy.sql.operators.custom_op
    :members:

@@ -1,5 +1,5 @@
 # sql/functions.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -17,6 +17,7 @@ from .selectable import FromClause, Select
 from . import operators
 from .visitors import VisitableType
 from .. import util
+from . import annotation
 
 _registry = util.defaultdict(dict)
 
@@ -59,6 +60,9 @@ class FunctionElement(Executable, ColumnElement, FromClause):
                                 operator=operators.comma_op,
                                  group_contents=True, *args).\
                                  self_group()
+
+    def _execute_on_connection(self, connection, multiparams, params):
+        return connection._execute_function(self, multiparams, params)
 
     @property
     def columns(self):
@@ -192,11 +196,10 @@ class _FunctionGenerator(object):
         else:
             package = None
 
-        if package is not None and \
-            package in _registry and \
-            fname in _registry[package]:
-            func = _registry[package][fname]
-            return func(*c, **o)
+        if package is not None:
+            func = _registry[package].get(fname)
+            if func is not None:
+                return func(*c, **o)
 
         return Function(self.__names[-1],
                         packagenames=self.__names[0:-1], *c, **o)
@@ -306,16 +309,16 @@ class Function(FunctionElement):
                                 _compared_to_type=self.type,
                                 unique=True)
 
-
 class _GenericMeta(VisitableType):
     def __init__(cls, clsname, bases, clsdict):
-        cls.name = name = clsdict.get('name', clsname)
-        cls.identifier = identifier = clsdict.get('identifier', name)
-        package = clsdict.pop('package', '_default')
-        # legacy
-        if '__return_type__' in clsdict:
-            cls.type = clsdict['__return_type__']
-        register_function(identifier, cls, package)
+        if annotation.Annotated not in cls.__mro__:
+            cls.name = name = clsdict.get('name', clsname)
+            cls.identifier = identifier = clsdict.get('identifier', name)
+            package = clsdict.pop('package', '_default')
+            # legacy
+            if '__return_type__' in clsdict:
+                cls.type = clsdict['__return_type__']
+            register_function(identifier, cls, package)
         super(_GenericMeta, cls).__init__(clsname, bases, clsdict)
 
 
@@ -404,7 +407,6 @@ class GenericFunction(util.with_metaclass(_GenericMeta, Function)):
                 group_contents=True, *parsed_args).self_group()
         self.type = sqltypes.to_instance(
             kwargs.pop("type_", None) or getattr(self, 'type', None))
-
 
 register_function("cast", Cast)
 register_function("extract", Extract)

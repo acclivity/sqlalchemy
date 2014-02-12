@@ -1,5 +1,5 @@
 # sql/__init__.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -35,6 +35,7 @@ from .expression import (
     exists,
     extract,
     false,
+    False_,
     func,
     insert,
     intersect,
@@ -55,6 +56,7 @@ from .expression import (
     table,
     text,
     true,
+    True_,
     tuple_,
     type_coerce,
     union,
@@ -63,7 +65,6 @@ from .expression import (
     )
 
 from .visitors import ClauseVisitor
-
 
 def __go(lcls):
     global __all__
@@ -82,6 +83,8 @@ def __go(lcls):
     _prepare_annotations(ClauseList, Annotated)
 
     _sa_util.dependencies.resolve_all("sqlalchemy.sql")
+
+    from . import naming
 
 __go(locals())
 

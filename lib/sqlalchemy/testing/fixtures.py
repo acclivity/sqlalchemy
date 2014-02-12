@@ -1,3 +1,9 @@
+# testing/fixtures.py
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
+#
+# This module is part of SQLAlchemy and is released under
+# the MIT License: http://www.opensource.org/licenses/mit-license.php
+
 from . import config
 from . import assertions, schema
 from .util import adict
@@ -204,6 +210,24 @@ class TablesTest(TestBase):
                 [dict(zip(headers[table], column_values))
                  for column_values in rows[table]])
 
+from sqlalchemy import event
+class RemovesEvents(object):
+    @util.memoized_property
+    def _event_fns(self):
+        return set()
+
+    def event_listen(self, target, name, fn):
+        self._event_fns.add((target, name, fn))
+        event.listen(target, name, fn)
+
+    def teardown(self):
+        for key in self._event_fns:
+            event.remove(*key)
+        super_ = super(RemovesEvents, self)
+        if hasattr(super_, "teardown"):
+            super_.teardown()
+
+
 
 class _ORMTest(object):
 
@@ -342,5 +366,5 @@ class DeclarativeMappedTest(MappedTest):
         cls.DeclarativeBasic = _DeclBase
         fn()
 
-        if cls.metadata.tables:
+        if cls.metadata.tables and cls.run_create_tables:
             cls.metadata.create_all(config.db)

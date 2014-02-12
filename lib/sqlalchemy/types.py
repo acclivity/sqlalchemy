@@ -1,5 +1,5 @@
 # types.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -8,7 +8,7 @@
 
 """
 
-__all__ = ['TypeEngine', 'TypeDecorator', 'AbstractType', 'UserDefinedType',
+__all__ = ['TypeEngine', 'TypeDecorator', 'UserDefinedType',
             'INT', 'CHAR', 'VARCHAR', 'NCHAR', 'NVARCHAR', 'TEXT', 'Text',
             'FLOAT', 'NUMERIC', 'REAL', 'DECIMAL', 'TIMESTAMP', 'DATETIME',
             'CLOB', 'BLOB', 'BINARY', 'VARBINARY', 'BOOLEAN', 'BIGINT',
@@ -62,6 +62,7 @@ from .sql.sqltypes import (
     SMALLINT,
     SmallInteger,
     String,
+    STRINGTYPE,
     TEXT,
     TIME,
     TIMESTAMP,

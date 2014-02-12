@@ -50,13 +50,13 @@ Version Check
 =============
 
 
-A quick check to verify that we are on at least **version 0.8** of SQLAlchemy:
+A quick check to verify that we are on at least **version 0.9** of SQLAlchemy:
 
 .. sourcecode:: pycon+sql
 
     >>> import sqlalchemy
     >>> sqlalchemy.__version__ # doctest:+SKIP
-    0.8.0
+    0.9.0
 
 Connecting
 ==========
@@ -76,6 +76,28 @@ see all the generated SQL produced. If you are working through this tutorial
 and want less output generated, set it to ``False``. This tutorial will format
 the SQL behind a popup window so it doesn't get in our way; just click the
 "SQL" links to see what's being generated.
+
+The return value of :func:`.create_engine` is an instance of
+:class:`.Engine`, and it represents the core interface to the
+database, adapted through a :term:`dialect` that handles the details
+of the database and :term:`DBAPI` in use.  In this case the SQLite
+dialect will interpret instructions to the Python built-in ``sqlite3``
+module.
+
+.. sidebar:: Lazy Connecting
+
+    The :class:`.Engine`, when first returned by :func:`.create_engine`,
+    has not actually tried to connect to the database yet; that happens
+    only the first time it is asked to perform a task against the database.
+
+The first time a method like :meth:`.Engine.execute` or :meth:`.Engine.connect`
+is called, the :class:`.Engine` establishes a real :term:`DBAPI` connection to the
+database, which is then used to emit the SQL.
+
+.. seealso::
+
+    :ref:`database_urls` - includes examples of :func:`.create_engine`
+    connecting to several kinds of databases with links to more information.
 
 Define and Create Tables
 =========================
@@ -238,7 +260,7 @@ we use the ``connect()`` method::
     >>> conn #doctest: +ELLIPSIS
     <sqlalchemy.engine.base.Connection object at 0x...>
 
-The :class:`~sqlalchemy.engine.base.Connection` object represents an actively
+The :class:`~sqlalchemy.engine.Connection` object represents an actively
 checked out DBAPI connection resource. Lets feed it our
 :class:`~sqlalchemy.sql.expression.Insert` object and see what happens:
 
@@ -252,7 +274,7 @@ checked out DBAPI connection resource. Lets feed it our
 So the INSERT statement was now issued to the database. Although we got
 positional "qmark" bind parameters instead of "named" bind parameters in the
 output. How come ? Because when executed, the
-:class:`~sqlalchemy.engine.base.Connection` used the SQLite **dialect** to
+:class:`~sqlalchemy.engine.Connection` used the SQLite **dialect** to
 help generate the statement; when we use the ``str()`` function, the statement
 isn't aware of this dialect, and falls back onto a default which uses named
 parameters. We can view this manually as follows:
@@ -264,9 +286,9 @@ parameters. We can view this manually as follows:
     'INSERT INTO users (name, fullname) VALUES (?, ?)'
 
 What about the ``result`` variable we got when we called ``execute()`` ? As
-the SQLAlchemy :class:`~sqlalchemy.engine.base.Connection` object references a
+the SQLAlchemy :class:`~sqlalchemy.engine.Connection` object references a
 DBAPI connection, the result, known as a
-:class:`~sqlalchemy.engine.result.ResultProxy` object, is analogous to the DBAPI
+:class:`~sqlalchemy.engine.ResultProxy` object, is analogous to the DBAPI
 cursor object. In the case of an INSERT, we can get important information from
 it, such as the primary key values which were generated from our statement:
 
@@ -281,7 +303,7 @@ did not specify the ``id`` column in our
 value would have been used. In either case, SQLAlchemy always knows how to get
 at a newly generated primary key value, even though the method of generating
 them is different across different databases; each database's
-:class:`~sqlalchemy.engine.base.Dialect` knows the specific steps needed to
+:class:`~sqlalchemy.engine.interfaces.Dialect` knows the specific steps needed to
 determine the correct value (or values; note that ``inserted_primary_key``
 returns a list so that it supports composite primary keys).
 
@@ -292,7 +314,7 @@ Our insert example above was intentionally a little drawn out to show some
 various behaviors of expression language constructs. In the usual case, an
 :class:`~sqlalchemy.sql.expression.Insert` statement is usually compiled
 against the parameters sent to the ``execute()`` method on
-:class:`~sqlalchemy.engine.base.Connection`, so that there's no need to use
+:class:`~sqlalchemy.engine.Connection`, so that there's no need to use
 the ``values`` keyword with :class:`~sqlalchemy.sql.expression.Insert`. Lets
 create a generic :class:`~sqlalchemy.sql.expression.Insert` statement again
 and use it in the "normal" way:
@@ -363,10 +385,10 @@ Above, we issued a basic :func:`.select` call, placing the ``users`` table
 within the COLUMNS clause of the select, and then executing. SQLAlchemy
 expanded the ``users`` table into the set of each of its columns, and also
 generated a FROM clause for us. The result returned is again a
-:class:`~sqlalchemy.engine.result.ResultProxy` object, which acts much like a
+:class:`~sqlalchemy.engine.ResultProxy` object, which acts much like a
 DBAPI cursor, including methods such as
-:func:`~sqlalchemy.engine.result.ResultProxy.fetchone` and
-:func:`~sqlalchemy.engine.result.ResultProxy.fetchall`. The easiest way to get
+:func:`~sqlalchemy.engine.ResultProxy.fetchone` and
+:func:`~sqlalchemy.engine.ResultProxy.fetchall`. The easiest way to get
 rows from it is to just iterate:
 
 .. sourcecode:: pycon+sql
@@ -414,7 +436,7 @@ But another way, whose usefulness will become apparent later on, is to use the
 
 Result sets which have pending rows remaining should be explicitly closed
 before discarding. While the cursor and connection resources referenced by the
-:class:`~sqlalchemy.engine.result.ResultProxy` will be respectively closed and
+:class:`~sqlalchemy.engine.ResultProxy` will be respectively closed and
 returned to the connection pool when the object is garbage collected, it's
 better to make it explicit as some database APIs are very picky about such
 things:
@@ -883,7 +905,6 @@ to "correlate" the inner ``users`` table with the outer one:
 Using Joins
 ============
 
-
 We're halfway along to being able to construct any SELECT expression. The next
 cornerstone of the SELECT is the JOIN expression. We've already been doing
 joins in our examples, by just placing two tables in either the columns clause
@@ -958,6 +979,14 @@ would be using ``OracleDialect``) to use Oracle-specific SQL:
 If you don't know what that SQL means, don't worry ! The secret tribe of
 Oracle DBAs don't want their black magic being found out ;).
 
+.. seealso::
+
+    :func:`.expression.join`
+
+    :func:`.expression.outerjoin`
+
+    :class:`.Join`
+
 Everything Else
 ================
 
@@ -965,14 +994,19 @@ The concepts of creating SQL expressions have been introduced. What's left are
 more variants of the same themes. So now we'll catalog the rest of the
 important things we'll need to know.
 
+.. _coretutorial_bind_param:
+
 Bind Parameter Objects
 ----------------------
 
 Throughout all these examples, SQLAlchemy is busy creating bind parameters
 wherever literal expressions occur. You can also specify your own bind
-parameters with your own names, and use the same statement repeatedly. The
-database dialect converts to the appropriate named or positional style, as
-here where it converts to positional for SQLite:
+parameters with your own names, and use the same statement repeatedly.
+The :func:`.bindparam` construct is used to produce a bound parameter
+with a given name.  While SQLAlchemy always refers to bound parameters by
+name on the API side, the
+database dialect converts to the appropriate named or positional style
+at execution time, as here where it converts to positional for SQLite:
 
 .. sourcecode:: pycon+sql
 
@@ -985,7 +1019,7 @@ here where it converts to positional for SQLite:
     ('wendy',)
     {stop}[(2, u'wendy', u'Wendy Williams')]
 
-Another important aspect of bind parameters is that they may be assigned a
+Another important aspect of :func:`.bindparam` is that it may be assigned a
 type. The type of the bind parameter will determine its behavior within
 expressions and also how the data bound to it is processed before being sent
 off to the database:
@@ -1001,7 +1035,7 @@ off to the database:
     {stop}[(2, u'wendy', u'Wendy Williams')]
 
 
-Bind parameters of the same name can also be used multiple times, where only a
+:func:`.bindparam` constructs of the same name can also be used multiple times, where only a
 single named value is needed in the execute parameters:
 
 .. sourcecode:: pycon+sql
@@ -1025,6 +1059,10 @@ single named value is needed in the execute parameters:
     ORDER BY addresses.id
     ('jack', 'jack')
     {stop}[(1, u'jack', u'Jack Jones', 1, 1, u'jack@yahoo.com'), (1, u'jack', u'Jack Jones', 2, 1, u'jack@msn.com')]
+
+.. seealso::
+
+    :func:`.bindparam`
 
 Functions
 ---------
@@ -1124,13 +1162,16 @@ of our selectable:
     >>> s.compile().params
     {u'x_2': 5, u'y_2': 12, u'y_1': 45, u'x_1': 17}
 
+.. seealso::
+
+    :data:`.func`
 
 Window Functions
 -----------------
 
 Any :class:`.FunctionElement`, including functions generated by
 :data:`~.expression.func`, can be turned into a "window function", that is an
-OVER clause, using the :meth:`~.FunctionElement.over` method:
+OVER clause, using the :meth:`.FunctionElement.over` method:
 
 .. sourcecode:: pycon+sql
 
@@ -1141,6 +1182,12 @@ OVER clause, using the :meth:`~.FunctionElement.over` method:
     >>> print s # doctest: +NORMALIZE_WHITESPACE
     SELECT users.id, row_number() OVER (ORDER BY users.name) AS anon_1
     FROM users
+
+.. seealso::
+
+    :func:`.over`
+
+    :meth:`.FunctionElement.over`
 
 Unions and Other Set Operations
 -------------------------------
@@ -1234,6 +1281,20 @@ want the "union" to be stated as a subquery:
     ('%@yahoo.com', '%@msn.com', '%@msn.com')
     {stop}[(1, 1, u'jack@yahoo.com')]
 
+.. seealso::
+
+    :func:`.union`
+
+    :func:`.union_all`
+
+    :func:`.intersect`
+
+    :func:`.intersect_all`
+
+    :func:`.except_`
+
+    :func:`.except_all`
+
 .. _scalar_selects:
 
 Scalar Selects
@@ -1285,6 +1346,12 @@ it using :meth:`.SelectBase.label` instead:
     FROM users
     ()
     {stop}[(u'jack', 2), (u'wendy', 2)]
+
+.. seealso::
+
+    :meth:`.Select.as_scalar`
+
+    :meth:`.Select.label`
 
 .. _correlated_subqueries:
 

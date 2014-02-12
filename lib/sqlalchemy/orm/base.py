@@ -1,8 +1,9 @@
 # orm/base.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
+
 """Constants and rudimental functions used throughout the ORM.
 
 """
@@ -79,6 +80,10 @@ LOAD_AGAINST_COMMITTED = util.symbol("LOAD_AGAINST_COMMITTED",
 """, canonical=32
 )
 
+NO_AUTOFLUSH = util.symbol("NO_AUTOFLUSH",
+"""loader callables should disable autoflush.
+""", canonical=64)
+
 # pre-packaged sets of flags used as inputs
 PASSIVE_OFF = util.symbol("PASSIVE_OFF",
     "Callables can be emitted in all cases.",
@@ -113,20 +118,53 @@ _INSTRUMENTOR = ('mapper', 'instrumentor')
 EXT_CONTINUE = util.symbol('EXT_CONTINUE')
 EXT_STOP = util.symbol('EXT_STOP')
 
-ONETOMANY = util.symbol('ONETOMANY')
-MANYTOONE = util.symbol('MANYTOONE')
-MANYTOMANY = util.symbol('MANYTOMANY')
+ONETOMANY = util.symbol('ONETOMANY',
+"""Indicates the one-to-many direction for a :func:`.relationship`.
 
-NOT_EXTENSION = util.symbol('NOT_EXTENSION')
+This symbol is typically used by the internals but may be exposed within
+certain API features.
+
+""")
+
+MANYTOONE = util.symbol('MANYTOONE',
+"""Indicates the many-to-one direction for a :func:`.relationship`.
+
+This symbol is typically used by the internals but may be exposed within
+certain API features.
+
+""")
+
+MANYTOMANY = util.symbol('MANYTOMANY',
+"""Indicates the many-to-many direction for a :func:`.relationship`.
+
+This symbol is typically used by the internals but may be exposed within
+certain API features.
+
+""")
+
+NOT_EXTENSION = util.symbol('NOT_EXTENSION',
 """Symbol indicating an :class:`_InspectionAttr` that's
    not part of sqlalchemy.ext.
 
    Is assigned to the :attr:`._InspectionAttr.extension_type`
    attibute.
 
-"""
+""")
 
 _none_set = frozenset([None])
+
+
+def _generative(*assertions):
+    """Mark a method as generative, e.g. method-chained."""
+
+    @util.decorator
+    def generate(fn, *args, **kw):
+        self = args[0]._clone()
+        for assertion in assertions:
+            assertion(self, fn.__name__)
+        fn(self, *args[1:], **kw)
+        return self
+    return generate
 
 
 # these can be replaced by sqlalchemy.ext.instrumentation
@@ -324,8 +362,8 @@ def class_mapper(class_, configure=True):
     """Given a class, return the primary :class:`.Mapper` associated
     with the key.
 
-    Raises :class:`.UnmappedClassError` if no mapping is configured
-    on the given class, or :class:`.ArgumentError` if a non-class
+    Raises :exc:`.UnmappedClassError` if no mapping is configured
+    on the given class, or :exc:`.ArgumentError` if a non-class
     object is passed.
 
     Equivalent functionality is available via the :func:`.inspect`
@@ -341,7 +379,7 @@ def class_mapper(class_, configure=True):
     if mapper is None:
         if not isinstance(class_, type):
             raise sa_exc.ArgumentError(
-                    "Class object expected, got '%r'." % class_)
+                    "Class object expected, got '%r'." % (class_, ))
         raise exc.UnmappedClassError(class_)
     else:
         return mapper

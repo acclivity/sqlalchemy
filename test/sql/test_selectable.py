@@ -10,6 +10,7 @@ from sqlalchemy.sql import util as sql_util, visitors, expression
 from sqlalchemy import exc
 from sqlalchemy.sql import table, column, null
 from sqlalchemy import util
+from sqlalchemy.schema import Column, Table, MetaData
 
 metadata = MetaData()
 table1 = Table('table1', metadata,
@@ -511,6 +512,18 @@ class SelectableTest(fixtures.TestBase, AssertsExecutionResults, AssertsCompiled
         self.assert_compile(
             s2.select(),
             "SELECT c FROM (SELECT (SELECT (SELECT table1.col1 AS a FROM table1) AS b) AS c)"
+        )
+
+    def test_self_referential_select_raises(self):
+        t = table('t', column('x'))
+
+        s = select([t])
+
+        s.append_whereclause(s.c.x > 5)
+        assert_raises_message(
+            exc.InvalidRequestError,
+            r"select\(\) construct refers to itself as a FROM",
+            s.compile
         )
 
     def test_unusual_column_elements_text(self):
@@ -1460,6 +1473,12 @@ class AnnotationsTest(fixtures.TestBase):
         c1.name = 'somename'
         eq_(c1_a.name, 'somename')
 
+    def test_late_table_add(self):
+        c1 = Column("foo", Integer)
+        c1_a = c1._annotate({"foo": "bar"})
+        t = Table('t', MetaData(), c1)
+        is_(c1_a.table, t)
+
     def test_custom_constructions(self):
         from sqlalchemy.schema import Column
         class MyColumn(Column):
@@ -1477,6 +1496,29 @@ class AnnotationsTest(fixtures.TestBase):
         assert isinstance(s2.c.foo, Column)
         annot_2 = s1._annotate({})
         assert isinstance(annot_2.c.foo, Column)
+
+    def test_custom_construction_correct_anno_subclass(self):
+        # [ticket:2918]
+        from sqlalchemy.schema import Column
+        from sqlalchemy.sql.elements import AnnotatedColumnElement
+        class MyColumn(Column):
+            pass
+
+        assert isinstance(
+                    MyColumn('x', Integer)._annotate({"foo": "bar"}),
+                    AnnotatedColumnElement)
+
+    def test_custom_construction_correct_anno_expr(self):
+        # [ticket:2918]
+        from sqlalchemy.schema import Column
+        class MyColumn(Column):
+            pass
+
+        col = MyColumn('x', Integer)
+        binary_1 = col == 5
+        col_anno = MyColumn('x', Integer)._annotate({"foo": "bar"})
+        binary_2 = col_anno == 5
+        eq_(binary_2.left._annotations, {"foo": "bar"})
 
     def test_annotated_corresponding_column(self):
         table1 = table('table1', column("col1"))
@@ -1884,3 +1926,133 @@ class WithLabelsTest(fixtures.TestBase):
             ['t1_x', 't2_x']
         )
         self._assert_result_keys(sel, ['t1_a', 't2_b'])
+
+class SelectProxyTest(fixtures.TestBase):
+    def _fixture(self):
+        m = MetaData()
+        t = Table('t', m, Column('x', Integer), Column('y', Integer))
+        return t
+
+    def _mapping(self, stmt):
+        compiled = stmt.compile()
+        return dict(
+                    (elem, key)
+                    for key, elements in compiled.result_map.items()
+                    for elem in elements[1]
+                )
+
+    def test_select_label_alt_name(self):
+        t = self._fixture()
+        l1, l2 = t.c.x.label('a'), t.c.y.label('b')
+        s = select([l1, l2])
+        mapping = self._mapping(s)
+        assert l1 in mapping
+
+        assert t.c.x not in mapping
+
+    def test_select_alias_label_alt_name(self):
+        t = self._fixture()
+        l1, l2 = t.c.x.label('a'), t.c.y.label('b')
+        s = select([l1, l2]).alias()
+        mapping = self._mapping(s)
+        assert l1 in mapping
+
+        assert t.c.x not in mapping
+
+    def test_select_alias_column(self):
+        t = self._fixture()
+        x, y = t.c.x, t.c.y
+        s = select([x, y]).alias()
+        mapping = self._mapping(s)
+
+        assert t.c.x in mapping
+
+    def test_select_alias_column_apply_labels(self):
+        t = self._fixture()
+        x, y = t.c.x, t.c.y
+        s = select([x, y]).apply_labels().alias()
+        mapping = self._mapping(s)
+        assert t.c.x in mapping
+
+    def test_select_table_alias_column(self):
+        t = self._fixture()
+        x, y = t.c.x, t.c.y
+
+        ta = t.alias()
+        s = select([ta.c.x, ta.c.y])
+        mapping = self._mapping(s)
+        assert x not in mapping
+
+    def test_select_label_alt_name_table_alias_column(self):
+        t = self._fixture()
+        x, y = t.c.x, t.c.y
+
+        ta = t.alias()
+        l1, l2 = ta.c.x.label('a'), ta.c.y.label('b')
+
+        s = select([l1, l2])
+        mapping = self._mapping(s)
+        assert x not in mapping
+        assert l1 in mapping
+        assert ta.c.x not in mapping
+
+class ForUpdateTest(fixtures.TestBase, AssertsCompiledSQL):
+    __dialect__ = "default"
+
+    def _assert_legacy(self, leg, read=False, nowait=False):
+        t = table('t', column('c'))
+        s1 = select([t], for_update=leg)
+
+        if leg is False:
+            assert s1._for_update_arg is None
+            assert s1.for_update is None
+        else:
+            eq_(
+                s1._for_update_arg.read, read
+            )
+            eq_(
+                s1._for_update_arg.nowait, nowait
+            )
+            eq_(s1.for_update, leg)
+
+    def test_false_legacy(self):
+        self._assert_legacy(False)
+
+    def test_plain_true_legacy(self):
+        self._assert_legacy(True)
+
+    def test_read_legacy(self):
+        self._assert_legacy("read", read=True)
+
+    def test_nowait_legacy(self):
+        self._assert_legacy("nowait", nowait=True)
+
+    def test_read_nowait_legacy(self):
+        self._assert_legacy("read_nowait", read=True, nowait=True)
+
+    def test_legacy_setter(self):
+        t = table('t', column('c'))
+        s = select([t])
+        s.for_update = 'nowait'
+        eq_(s._for_update_arg.nowait, True)
+
+    def test_basic_clone(self):
+        t = table('t', column('c'))
+        s = select([t]).with_for_update(read=True, of=t.c.c)
+        s2 = visitors.ReplacingCloningVisitor().traverse(s)
+        assert s2._for_update_arg is not s._for_update_arg
+        eq_(s2._for_update_arg.read, True)
+        eq_(s2._for_update_arg.of, [t.c.c])
+        self.assert_compile(s2,
+            "SELECT t.c FROM t FOR SHARE OF t",
+            dialect="postgresql")
+
+    def test_adapt(self):
+        t = table('t', column('c'))
+        s = select([t]).with_for_update(read=True, of=t.c.c)
+        a = t.alias()
+        s2 = sql_util.ClauseAdapter(a).traverse(s)
+        eq_(s2._for_update_arg.of, [a.c.c])
+        self.assert_compile(s2,
+            "SELECT t_1.c FROM t AS t_1 FOR SHARE OF t_1",
+            dialect="postgresql")

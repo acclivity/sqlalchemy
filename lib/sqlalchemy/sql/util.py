@@ -1,5 +1,5 @@
 # sql/util.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -254,26 +254,6 @@ class _repr_params(object):
             return repr(self.params)
 
 
-def expression_as_ddl(clause):
-    """Given a SQL expression, convert for usage in DDL, such as
-     CREATE INDEX and CHECK CONSTRAINT.
-
-     Converts bind params into quoted literals, column identifiers
-     into detached column constructs so that the parent table
-     identifier is not included.
-
-    """
-    def repl(element):
-        if isinstance(element, BindParameter):
-            return literal_column(_quote_ddl_expr(element.value))
-        elif isinstance(element, ColumnClause) and \
-                element.table is not None:
-            col = ColumnClause(element.name)
-            return col
-        else:
-            return None
-
-    return visitors.replacement_traverse(clause, {}, repl)
 
 
 def adapt_criterion_to_null(crit, nulls):

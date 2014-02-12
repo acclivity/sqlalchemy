@@ -1,5 +1,5 @@
 # orm/relationships.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -83,7 +83,7 @@ class RelationshipProperty(StrategizedProperty):
 
     """
 
-    strategy_wildcard_key = 'relationship:*'
+    strategy_wildcard_key = 'relationship'
 
     _dependency_processor = None
 
@@ -103,6 +103,7 @@ class RelationshipProperty(StrategizedProperty):
         enable_typechecks=True, join_depth=None,
         comparator_factory=None,
         single_parent=False, innerjoin=False,
+        distinct_target_key=None,
         doc=None,
         active_history=False,
         cascade_backrefs=True,
@@ -110,10 +111,13 @@ class RelationshipProperty(StrategizedProperty):
         strategy_class=None, _local_remote_pairs=None,
         query_class=None,
             info=None):
-        """Provide a relationship of a primary Mapper to a secondary Mapper.
+        """Provide a relationship between two mapped classes.
 
         This corresponds to a parent-child or associative table relationship.  The
         constructed class is an instance of :class:`.RelationshipProperty`.
+
+        For an overview of basic patterns with :func:`.relationship` as
+        used with Declarative, see :ref:`relationship_patterns`.
 
         A typical :func:`.relationship`, used in a classical mapping::
 
@@ -164,8 +168,11 @@ class RelationshipProperty(StrategizedProperty):
 
         :param secondary:
           for a many-to-many relationship, specifies the intermediary
-          table, and is an instance of :class:`.Table`.  The ``secondary`` keyword
-          argument should generally only
+          table, and is typically an instance of :class:`.Table`.
+          In less common circumstances, the argument may also be specified
+          as an :class:`.Alias` construct, or even a :class:`.Join` construct.
+
+          The ``secondary`` keyword argument should generally only
           be used for a table that is not otherwise expressed in any class
           mapping, unless this relationship is declared as view only, otherwise
           conflicting persistence operations can occur.
@@ -173,6 +180,13 @@ class RelationshipProperty(StrategizedProperty):
           ``secondary`` may
           also be passed as a callable function which is evaluated at
           mapper initialization time.
+
+          .. seealso::
+
+              :ref:`relationships_many_to_many`
+
+          .. versionadded:: 0.9.2 :paramref:`.relationship.secondary` works
+             more effectively when referring to a :class:`.Join` instance.
 
         :param active_history=False:
           When ``True``, indicates that the "previous" value for a
@@ -281,6 +295,27 @@ class RelationshipProperty(StrategizedProperty):
         :param comparator_factory:
           a class which extends :class:`.RelationshipProperty.Comparator` which
           provides custom SQL clause generation for comparison operations.
+
+        :param distinct_target_key=None:
+          Indicate if a "subquery" eager load should apply the DISTINCT
+          keyword to the innermost SELECT statement.  When left as ``None``,
+          the DISTINCT keyword will be applied in those cases when the target
+          columns do not comprise the full primary key of the target table.
+          When set to ``True``, the DISTINCT keyword is applied to the innermost
+          SELECT unconditionally.
+
+          It may be desirable to set this flag to False when the DISTINCT is
+          reducing performance of the innermost subquery beyond that of what
+          duplicate innermost rows may be causing.
+
+          .. versionadded:: 0.8.3 - distinct_target_key allows the
+             subquery eager loader to apply a DISTINCT modifier to the
+             innermost SELECT.
+
+          .. versionchanged:: 0.9.0 - distinct_target_key now defaults to
+             ``None``, so that the feature enables itself automatically for
+             those cases where the innermost query targets a non-unique
+             key.
 
         :param doc:
           docstring which will be applied to the resulting descriptor.
@@ -426,10 +461,6 @@ class RelationshipProperty(StrategizedProperty):
         :param load_on_pending=False:
           Indicates loading behavior for transient or pending parent objects.
 
-          .. versionchanged:: 0.8
-              load_on_pending is superseded by
-              :meth:`.Session.enable_relationship_loading`.
-
           When set to ``True``, causes the lazy-loader to
           issue a query for a parent object that is not persistent, meaning it has
           never been flushed.  This may take effect for a pending object when
@@ -444,6 +475,12 @@ class RelationshipProperty(StrategizedProperty):
           is not not intended for general use.
 
           .. versionadded:: 0.6.5
+
+          .. seealso::
+
+              :meth:`.Session.enable_relationship_loading` - this method establishes
+              "load on pending" behavior for the whole object, and also allows
+              loading on objects that remain transient or detached.
 
         :param order_by:
           indicates the ordering that should be applied when loading these
@@ -538,6 +575,10 @@ class RelationshipProperty(StrategizedProperty):
           which is evaluated at mapper initialization time, and may be passed as a
           Python-evaluable string when using Declarative.
 
+          .. seealso::
+
+              :ref:`relationship_primaryjoin`
+
         :param remote_side:
           used for self-referential relationships, indicates the column or
           list of columns that form the "remote side" of the relationship.
@@ -568,6 +609,10 @@ class RelationshipProperty(StrategizedProperty):
           ``secondaryjoin`` may also be passed as a callable function
           which is evaluated at mapper initialization time, and may be passed as a
           Python-evaluable string when using Declarative.
+
+          .. seealso::
+
+              :ref:`relationship_primaryjoin`
 
         :param single_parent=(True|False):
           when True, installs a validator which will prevent objects
@@ -621,6 +666,7 @@ class RelationshipProperty(StrategizedProperty):
         self.enable_typechecks = enable_typechecks
         self.query_class = query_class
         self.innerjoin = innerjoin
+        self.distinct_target_key = distinct_target_key
         self.doc = doc
         self.active_history = active_history
         self.join_depth = join_depth
@@ -638,8 +684,7 @@ class RelationshipProperty(StrategizedProperty):
         if strategy_class:
             self.strategy_class = strategy_class
         else:
-            self.strategy_class = self._strategy_lookup(lazy=self.lazy)
-        self._lazy_strategy = self._strategy_lookup(lazy="select")
+            self.strategy_class = self._strategy_lookup(("lazy", self.lazy))
 
         self._reverse_property = set()
 
@@ -710,7 +755,7 @@ class RelationshipProperty(StrategizedProperty):
         @util.memoized_property
         def mapper(self):
             """The target :class:`.Mapper` referred to by this
-            :class:`.RelationshipProperty.Comparator.
+            :class:`.RelationshipProperty.Comparator`.
 
             This is the "target" or "remote" side of the
             :func:`.relationship`.
@@ -723,11 +768,10 @@ class RelationshipProperty(StrategizedProperty):
             return self.property.parent
 
         def _source_selectable(self):
-            elem = self.property.parent._with_polymorphic_selectable
-            if self.adapter:
-                return self.adapter(elem)
+            if self._adapt_to_entity:
+                return self._adapt_to_entity.selectable
             else:
-                return elem
+                return self.property.parent._with_polymorphic_selectable
 
         def __clause_element__(self):
             adapt_from = self._source_selectable()
@@ -878,7 +922,7 @@ class RelationshipProperty(StrategizedProperty):
                 criterion = criterion._annotate(
                     {'no_replacement_traverse': True})
 
-            crit = j & criterion
+            crit = j & sql.True_._ifnone(criterion)
 
             ex = sql.exists([1], crit, from_obj=dest).correlate_except(dest)
             if secondary is not None:
@@ -1149,7 +1193,7 @@ class RelationshipProperty(StrategizedProperty):
                                     alias_secondary=True):
         if value is not None:
             value = attributes.instance_state(value)
-        return self._get_strategy(self._lazy_strategy).lazy_clause(value,
+        return self._lazy_strategy.lazy_clause(value,
                 reverse_direction=not value_is_parent,
                 alias_secondary=alias_secondary,
                 adapt_source=adapt_source)
@@ -1326,23 +1370,21 @@ class RelationshipProperty(StrategizedProperty):
         This is a lazy-initializing static attribute.
 
         """
-        if isinstance(self.argument, type):
-            mapper_ = mapperlib.class_mapper(self.argument,
+        if util.callable(self.argument) and \
+            not isinstance(self.argument, (type, mapperlib.Mapper)):
+            argument = self.argument()
+        else:
+            argument = self.argument
+
+        if isinstance(argument, type):
+            mapper_ = mapperlib.class_mapper(argument,
                     configure=False)
         elif isinstance(self.argument, mapperlib.Mapper):
-            mapper_ = self.argument
-        elif util.callable(self.argument):
-
-            # accept a callable to suit various deferred-
-            # configurational schemes
-
-            mapper_ = mapperlib.class_mapper(self.argument(),
-                    configure=False)
+            mapper_ = argument
         else:
             raise sa_exc.ArgumentError("relationship '%s' expects "
                     "a class or a mapper argument (received: %s)"
-                    % (self.key, type(self.argument)))
-        assert isinstance(mapper_, mapperlib.Mapper), mapper_
+                    % (self.key, type(argument)))
         return mapper_
 
     @util.memoized_property
@@ -1350,7 +1392,8 @@ class RelationshipProperty(StrategizedProperty):
     def table(self):
         """Return the selectable linked to this
         :class:`.RelationshipProperty` object's target
-        :class:`.Mapper`."""
+        :class:`.Mapper`.
+        """
         return self.target
 
     def do_init(self):
@@ -1361,6 +1404,8 @@ class RelationshipProperty(StrategizedProperty):
         self._post_init()
         self._generate_backref()
         super(RelationshipProperty, self).do_init()
+        self._lazy_strategy = self._get_strategy((("lazy", "select"),))
+
 
     def _process_dependent_arguments(self):
         """Convert incoming configuration arguments to their
@@ -1535,7 +1580,7 @@ class RelationshipProperty(StrategizedProperty):
         if not self.is_primary():
             return
         if self.backref is not None and not self.back_populates:
-            if isinstance(self.backref, str):
+            if isinstance(self.backref, util.string_types):
                 backref_key, kwargs = self.backref, {}
             else:
                 backref_key, kwargs = self.backref
@@ -1602,7 +1647,7 @@ class RelationshipProperty(StrategizedProperty):
         """memoize the 'use_get' attribute of this RelationshipLoader's
         lazyloader."""
 
-        strategy = self._get_strategy(self._lazy_strategy)
+        strategy = self._lazy_strategy
         return strategy.use_get
 
     @util.memoized_property
@@ -2398,7 +2443,7 @@ class JoinCondition(object):
 
         if aliased:
             if secondary is not None:
-                secondary = secondary.alias()
+                secondary = secondary.alias(flat=True)
                 primary_aliasizer = ClauseAdapter(secondary)
                 secondary_aliasizer = \
                     ClauseAdapter(dest_selectable,

@@ -1,5 +1,5 @@
 # orm/properties.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -30,6 +30,8 @@ class ColumnProperty(StrategizedProperty):
     Public constructor is the :func:`.orm.column_property` function.
 
     """
+
+    strategy_wildcard_key = 'column'
 
     def __init__(self, *columns, **kwargs):
         """Provide a column-level property for use with a Mapper.
@@ -142,8 +144,9 @@ class ColumnProperty(StrategizedProperty):
         util.set_creation_order(self)
 
         self.strategy_class = self._strategy_lookup(
-                                    deferred=self.deferred,
-                                    instrument=self.instrument)
+                                    ("deferred", self.deferred),
+                                    ("instrument", self.instrument)
+                                    )
 
     @property
     def expression(self):

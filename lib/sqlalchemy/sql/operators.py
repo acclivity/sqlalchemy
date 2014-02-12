@@ -1,5 +1,5 @@
 # sql/operators.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -27,8 +27,11 @@ else:
 class Operators(object):
     """Base of comparison and logical operators.
 
-    Implements base methods :meth:`operate` and :meth:`reverse_operate`,
-    as well as :meth:`__and__`, :meth:`__or__`, :meth:`__invert__`.
+    Implements base methods :meth:`~sqlalchemy.sql.operators.Operators.operate` and
+    :meth:`~sqlalchemy.sql.operators.Operators.reverse_operate`, as well as
+    :meth:`~sqlalchemy.sql.operators.Operators.__and__`,
+    :meth:`~sqlalchemy.sql.operators.Operators.__or__`,
+    :meth:`~sqlalchemy.sql.operators.Operators.__invert__`.
 
     Usually is used via its most common subclass
     :class:`.ColumnOperators`.
@@ -99,7 +102,7 @@ class Operators(object):
         """
         return self.operate(inv)
 
-    def op(self, opstring, precedence=0):
+    def op(self, opstring, precedence=0, is_comparison=False):
         """produce a generic operator function.
 
         e.g.::
@@ -131,12 +134,23 @@ class Operators(object):
 
          .. versionadded:: 0.8 - added the 'precedence' argument.
 
+        :param is_comparison: if True, the operator will be considered as a
+         "comparison" operator, that is which evaulates to a boolean true/false
+         value, like ``==``, ``>``, etc.  This flag should be set so that
+         ORM relationships can establish that the operator is a comparison
+         operator when used in a custom join condition.
+
+         .. versionadded:: 0.9.2 - added the :paramref:`.Operators.op.is_comparison`
+            flag.
+
         .. seealso::
 
             :ref:`types_operators`
 
+            :ref:`relationship_custom_operator`
+
         """
-        operator = custom_op(opstring, precedence)
+        operator = custom_op(opstring, precedence, is_comparison)
 
         def against(other):
             return operator(self, other)
@@ -197,9 +211,10 @@ class custom_op(object):
     """
     __name__ = 'custom_op'
 
-    def __init__(self, opstring, precedence=0):
+    def __init__(self, opstring, precedence=0, is_comparison=False):
         self.opstring = opstring
         self.precedence = precedence
+        self.is_comparison = is_comparison
 
     def __eq__(self, other):
         return isinstance(other, custom_op) and \
@@ -654,6 +669,12 @@ def exists():
     raise NotImplementedError()
 
 
+def istrue(a):
+    raise NotImplementedError()
+
+def isfalse(a):
+    raise NotImplementedError()
+
 def is_(a, b):
     return a.is_(b)
 
@@ -760,7 +781,8 @@ _comparison = set([eq, ne, lt, gt, ge, le, between_op])
 
 
 def is_comparison(op):
-    return op in _comparison
+    return op in _comparison or \
+        isinstance(op, custom_op) and op.is_comparison
 
 
 def is_commutative(op):
@@ -779,6 +801,7 @@ parenthesize (a op b).
 
 """
 
+_asbool = util.symbol('_asbool', canonical=-10)
 _smallest = util.symbol('_smallest', canonical=-100)
 _largest = util.symbol('_largest', canonical=100)
 
@@ -816,12 +839,19 @@ _PRECEDENCE = {
     between_op: 5,
     distinct_op: 5,
     inv: 5,
+    istrue: 5,
+    isfalse: 5,
     and_: 3,
     or_: 2,
     comma_op: -1,
-    collate: 7,
+
+    desc_op: 3,
+    asc_op: 3,
+    collate: 4,
+
     as_: -1,
     exists: 0,
+    _asbool: -10,
     _smallest: _smallest,
     _largest: _largest
 }

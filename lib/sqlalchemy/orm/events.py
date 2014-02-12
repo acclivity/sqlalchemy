@@ -1,5 +1,5 @@
 # orm/events.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -192,12 +192,9 @@ class InstanceEvents(event.Events):
             event_key.dispatch_target, event_key.identifier, event_key.fn
 
         if not raw:
-            orig_fn = fn
-
             def wrap(state, *arg, **kw):
-                return orig_fn(state.obj(), *arg, **kw)
-            fn = wrap
-            event_key = event_key.with_wrapper(fn)
+                return fn(state.obj(), *arg, **kw)
+            event_key = event_key.with_wrapper(wrap)
 
         event_key.base_listen(propagate=propagate)
 
@@ -369,15 +366,18 @@ class _EventsHold(event.RefCollection):
                     stack.extend(subclass.__subclasses__())
                     subject = target.resolve(subclass)
                     if subject is not None:
+                        # we are already going through __subclasses__()
+                        # so leave generic propagate flag False
                         event_key.with_dispatch_target(subject).\
-                                listen(raw=raw, propagate=propagate)
+                            listen(raw=raw, propagate=False)
 
     def remove(self, event_key):
         target, identifier, fn = \
             event_key.dispatch_target, event_key.identifier, event_key.fn
 
-        collection = target.all_holds[target.class_]
-        del collection[event_key._key]
+        if isinstance(target, _EventsHold):
+            collection = target.all_holds[target.class_]
+            del collection[event_key._key]
 
     @classmethod
     def populate(cls, class_, subject):
@@ -517,18 +517,15 @@ class MapperEvents(event.Events):
                 except ValueError:
                     target_index = None
 
-            wrapped_fn = fn
-
             def wrap(*arg, **kw):
                 if not raw and target_index is not None:
                     arg = list(arg)
                     arg[target_index] = arg[target_index].obj()
                 if not retval:
-                    wrapped_fn(*arg, **kw)
+                    fn(*arg, **kw)
                     return interfaces.EXT_CONTINUE
                 else:
-                    return wrapped_fn(*arg, **kw)
-            fn = wrap
+                    return fn(*arg, **kw)
             event_key = event_key.with_wrapper(wrap)
 
         if propagate:
@@ -585,6 +582,23 @@ class MapperEvents(event.Events):
 
         """
         # TODO: need coverage for this event
+
+    def before_configured(self):
+        """Called before a series of mappers have been configured.
+
+        This corresponds to the :func:`.orm.configure_mappers` call, which
+        note is usually called automatically as mappings are first
+        used.
+
+        Theoretically this event is called once per
+        application, but is actually called any time new mappers
+        are to be affected by a :func:`.orm.configure_mappers`
+        call.   If new mappings are constructed after existing ones have
+        already been used, this event can be called again.
+
+        .. versionadded:: 0.9.3
+
+        """
 
     def after_configured(self):
         """Called after a series of mappers have been configured.
@@ -1116,7 +1130,7 @@ class SessionEvents(event.Events):
 
     The :func:`~.event.listen` function will accept
     :class:`.Session` objects as well as the return result
-    of :func:`.sessionmaker` and :func:`.scoped_session`.
+    of :class:`~.sessionmaker()` and :class:`~.scoped_session()`.
 
     Additionally, it accepts the :class:`.Session` class which
     will apply listeners to all :class:`.Session` instances
@@ -1203,7 +1217,7 @@ class SessionEvents(event.Events):
 
         .. note::
 
-            The :meth:`.before_commit` hook is *not* per-flush,
+            The :meth:`~.SessionEvents.before_commit` hook is *not* per-flush,
             that is, the :class:`.Session` can emit SQL to the database
             many times within the scope of a transaction.
             For interception of these events, use the :meth:`~.SessionEvents.before_flush`,
@@ -1295,9 +1309,9 @@ class SessionEvents(event.Events):
 
         :param session: The target :class:`.Session`.
         :param previous_transaction: The :class:`.SessionTransaction`
-        transactional marker object which was just closed.   The current
-        :class:`.SessionTransaction` for the given :class:`.Session` is
-        available via the :attr:`.Session.transaction` attribute.
+         transactional marker object which was just closed.   The current
+         :class:`.SessionTransaction` for the given :class:`.Session` is
+         available via the :attr:`.Session.transaction` attribute.
 
         .. versionadded:: 0.7.3
 
@@ -1389,7 +1403,7 @@ class SessionEvents(event.Events):
         This is called before an add, delete or merge causes
         the object to be part of the session.
 
-        .. versionadded:: 0.8.  Note that :meth:`.after_attach` now
+        .. versionadded:: 0.8.  Note that :meth:`~.SessionEvents.after_attach` now
            fires off after the item is part of the session.
            :meth:`.before_attach` is provided for those cases where
            the item should not yet be part of the session state.
@@ -1504,7 +1518,7 @@ class AttributeEvents(event.Events):
         listen(UserContact.phone, 'set', validate_phone, retval=True)
 
     A validation function like the above can also raise an exception
-    such as :class:`.ValueError` to halt the operation.
+    such as :exc:`ValueError` to halt the operation.
 
     Several modifiers are available to the :func:`~.event.listen` function.
 
@@ -1560,17 +1574,14 @@ class AttributeEvents(event.Events):
             target.dispatch._active_history = True
 
         if not raw or not retval:
-            orig_fn = fn
-
             def wrap(target, value, *arg):
                 if not raw:
                     target = target.obj()
                 if not retval:
-                    orig_fn(target, value, *arg)
+                    fn(target, value, *arg)
                     return value
                 else:
-                    return orig_fn(target, value, *arg)
-            fn = wrap
+                    return fn(target, value, *arg)
             event_key = event_key.with_wrapper(wrap)
 
         event_key.base_listen(propagate=propagate)

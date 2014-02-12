@@ -1,5 +1,5 @@
 # sql/selectable.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -14,7 +14,7 @@ from .elements import ClauseElement, TextClause, ClauseList, \
 from .elements import _clone, \
         _literal_as_text, _interpret_as_column_or_from, _expand_cloned,\
         _select_iterables, _anonymous_label, _clause_element_as_expr,\
-        _cloned_intersection, _cloned_difference
+        _cloned_intersection, _cloned_difference, True_, _only_column_elements
 from .base import Immutable, Executable, _generative, \
             ColumnCollection, ColumnSet, _from_objects, Generative
 from . import type_api
@@ -136,7 +136,19 @@ class FromClause(Selectable):
     __visit_name__ = 'fromclause'
     named_with_column = False
     _hide_froms = []
+
+    _textual = False
+    """a marker that allows us to easily distinguish a :class:`.TextAsFrom`
+    or similar object from other kinds of :class:`.FromClause` objects."""
+
     schema = None
+    """Define the 'schema' attribute for this :class:`.FromClause`.
+
+    This is typically ``None`` for most objects except that of :class:`.Table`,
+    where it is taken as the value of the :paramref:`.Table.schema` argument.
+
+    """
+
     _memoized_property = util.group_expirable_memoized_property(["_columns"])
 
     @util.dependencies("sqlalchemy.sql.functions")
@@ -167,14 +179,74 @@ class FromClause(Selectable):
         return Select([self], whereclause, **params)
 
     def join(self, right, onclause=None, isouter=False):
-        """return a join of this :class:`.FromClause` against another
-        :class:`.FromClause`."""
+        """Return a :class:`.Join` from this :class:`.FromClause`
+        to another :class:`FromClause`.
+
+        E.g.::
+
+            from sqlalchemy import join
+
+            j = user_table.join(address_table,
+                            user_table.c.id == address_table.c.user_id)
+            stmt = select([user_table]).select_from(j)
+
+        would emit SQL along the lines of::
+
+            SELECT user.id, user.name FROM user
+            JOIN address ON user.id = address.user_id
+
+        :param right: the right side of the join; this is any :class:`.FromClause`
+         object such as a :class:`.Table` object, and may also be a selectable-compatible
+         object such as an ORM-mapped class.
+
+        :param onclause: a SQL expression representing the ON clause of the
+         join.  If left at ``None``, :meth:`.FromClause.join` will attempt to
+         join the two tables based on a foreign key relationship.
+
+        :param isouter: if True, render a LEFT OUTER JOIN, instead of JOIN.
+
+        .. seealso::
+
+            :func:`.join` - standalone function
+
+            :class:`.Join` - the type of object produced
+
+        """
 
         return Join(self, right, onclause, isouter)
 
     def outerjoin(self, right, onclause=None):
-        """return an outer join of this :class:`.FromClause` against another
-        :class:`.FromClause`."""
+        """Return a :class:`.Join` from this :class:`.FromClause`
+        to another :class:`FromClause`, with the "isouter" flag set to
+        True.
+
+        E.g.::
+
+            from sqlalchemy import outerjoin
+
+            j = user_table.outerjoin(address_table,
+                            user_table.c.id == address_table.c.user_id)
+
+        The above is equivalent to::
+
+            j = user_table.join(address_table,
+                            user_table.c.id == address_table.c.user_id, isouter=True)
+
+        :param right: the right side of the join; this is any :class:`.FromClause`
+         object such as a :class:`.Table` object, and may also be a selectable-compatible
+         object such as an ORM-mapped class.
+
+        :param onclause: a SQL expression representing the ON clause of the
+         join.  If left at ``None``, :meth:`.FromClause.join` will attempt to
+         join the two tables based on a foreign key relationship.
+
+        .. seealso::
+
+            :meth:`.FromClause.join`
+
+            :class:`.Join`
+
+        """
 
         return Join(self, right, onclause, True)
 
@@ -246,11 +318,11 @@ class FromClause(Selectable):
         :param column: the target :class:`.ColumnElement` to be matched
 
         :param require_embedded: only return corresponding columns for
-        the given :class:`.ColumnElement`, if the given
-        :class:`.ColumnElement` is actually present within a sub-element
-        of this :class:`.FromClause`.  Normally the column will match if
-        it merely shares a common ancestor with one of the exported
-        columns of this :class:`.FromClause`.
+         the given :class:`.ColumnElement`, if the given :class:`.ColumnElement`
+         is actually present within a sub-element
+         of this :class:`.FromClause`.  Normally the column will match if
+         it merely shares a common ancestor with one of the exported
+         columns of this :class:`.FromClause`.
 
         """
 
@@ -420,8 +492,14 @@ class Join(FromClause):
     elements.
 
     The public constructor function for :class:`.Join` is the module-level
-    :func:`join()` function, as well as the :func:`join()` method available
-    off all :class:`.FromClause` subclasses.
+    :func:`.join()` function, as well as the :meth:`.FromClause.join` method
+    of any :class:`.FromClause` (e.g. such as :class:`.Table`).
+
+    .. seealso::
+
+        :func:`.join`
+
+        :meth:`.FromClause.join`
 
     """
     __visit_name__ = 'join'
@@ -472,31 +550,43 @@ class Join(FromClause):
 
     @classmethod
     def _create_join(cls, left, right, onclause=None, isouter=False):
-        """Return a ``JOIN`` clause element (regular inner join).
+        """Produce a :class:`.Join` object, given two :class:`.FromClause`
+        expressions.
 
-        The returned object is an instance of :class:`.Join`.
+        E.g.::
 
-        Similar functionality is also available via the
-        :meth:`~.FromClause.join()` method on any
-        :class:`.FromClause`.
+            j = join(user_table, address_table, user_table.c.id == address_table.c.user_id)
+            stmt = select([user_table]).select_from(j)
+
+        would emit SQL along the lines of::
+
+            SELECT user.id, user.name FROM user
+            JOIN address ON user.id = address.user_id
+
+        Similar functionality is available given any :class:`.FromClause` object
+        (e.g. such as a :class:`.Table`) using the :meth:`.FromClause.join`
+        method.
 
         :param left: The left side of the join.
 
-        :param right: The right side of the join.
+        :param right: the right side of the join; this is any :class:`.FromClause`
+         object such as a :class:`.Table` object, and may also be a selectable-compatible
+         object such as an ORM-mapped class.
 
-        :param onclause:  Optional criterion for the ``ON`` clause, is
-          derived from foreign key relationships established between
-          left and right otherwise.
+        :param onclause: a SQL expression representing the ON clause of the
+         join.  If left at ``None``, :meth:`.FromClause.join` will attempt to
+         join the two tables based on a foreign key relationship.
 
-        :param isouter: if True, produce an outer join; synonymous
-         with :func:`.outerjoin`.
+        :param isouter: if True, render a LEFT OUTER JOIN, instead of JOIN.
 
-        To chain joins together, use the :meth:`.FromClause.join` or
-        :meth:`.FromClause.outerjoin` methods on the resulting
-        :class:`.Join` object.
+        .. seealso::
 
+            :meth:`.FromClause.join` - method form, based on a given left side
+
+            :class:`.Join` - the type of object produced
 
         """
+
         return cls(left, right, onclause, isouter)
 
 
@@ -756,7 +846,7 @@ class Join(FromClause):
                     ON table_b_1.id = table_c_1.b_id
             ) ON table_a_1.id = table_b_1.a_id
 
-        The standalone :func:`experssion.alias` function as well as the
+        The standalone :func:`~.expression.alias` function as well as the
         base :meth:`.FromClause.alias` method also support the ``flat=True``
         argument as a no-op, so that the argument can be passed to the
         ``alias()`` method of any selectable.
@@ -1151,42 +1241,84 @@ class TableClause(Immutable, FromClause):
         return [self]
 
 
+class ForUpdateArg(ClauseElement):
+
+    @classmethod
+    def parse_legacy_select(self, arg):
+        """Parse the for_update arugment of :func:`.select`.
+
+        :param mode: Defines the lockmode to use.
+
+            ``None`` - translates to no lockmode
+
+            ``'update'`` - translates to ``FOR UPDATE``
+            (standard SQL, supported by most dialects)
+
+            ``'nowait'`` - translates to ``FOR UPDATE NOWAIT``
+            (supported by Oracle, PostgreSQL 8.1 upwards)
+
+            ``'read'`` - translates to ``LOCK IN SHARE MODE`` (for MySQL),
+            and ``FOR SHARE`` (for PostgreSQL)
+
+            ``'read_nowait'`` - translates to ``FOR SHARE NOWAIT``
+            (supported by PostgreSQL). ``FOR SHARE`` and
+            ``FOR SHARE NOWAIT`` (PostgreSQL).
+
+        """
+        if arg in (None, False):
+            return None
+
+        nowait = read = False
+        if arg == 'nowait':
+            nowait = True
+        elif arg == 'read':
+            read = True
+        elif arg == 'read_nowait':
+            read = nowait = True
+        elif arg is not True:
+            raise exc.ArgumentError("Unknown for_update argument: %r" % arg)
+
+        return ForUpdateArg(read=read, nowait=nowait)
+
+    @property
+    def legacy_for_update_value(self):
+        if self.read and not self.nowait:
+            return "read"
+        elif self.read and self.nowait:
+            return "read_nowait"
+        elif self.nowait:
+            return "nowait"
+        else:
+            return True
+
+    def _copy_internals(self, clone=_clone, **kw):
+        if self.of is not None:
+            self.of = [clone(col, **kw) for col in self.of]
+
+    def __init__(self, nowait=False, read=False, of=None):
+        """Represents arguments specified to :meth:`.Select.for_update`.
+
+        .. versionadded:: 0.9.0
+        """
+
+        self.nowait = nowait
+        self.read = read
+        if of is not None:
+            self.of = [_interpret_as_column_or_from(elem)
+                        for elem in util.to_list(of)]
+        else:
+            self.of = None
+
+
 class SelectBase(Executable, FromClause):
-    """Base class for :class:`.Select` and :class:`.CompoundSelect`."""
+    """Base class for SELECT statements.
 
-    _order_by_clause = ClauseList()
-    _group_by_clause = ClauseList()
-    _limit = None
-    _offset = None
 
-    def __init__(self,
-            use_labels=False,
-            for_update=False,
-            limit=None,
-            offset=None,
-            order_by=None,
-            group_by=None,
-            bind=None,
-            autocommit=None):
-        self.use_labels = use_labels
-        self.for_update = for_update
-        if autocommit is not None:
-            util.warn_deprecated('autocommit on select() is '
-                                 'deprecated.  Use .execution_options(a'
-                                 'utocommit=True)')
-            self._execution_options = \
-                self._execution_options.union(
-                  {'autocommit': autocommit})
-        if limit is not None:
-            self._limit = util.asint(limit)
-        if offset is not None:
-            self._offset = util.asint(offset)
-        self._bind = bind
+    This includes :class:`.Select`, :class:`.CompoundSelect` and
+    :class:`.TextAsFrom`.
 
-        if order_by is not None:
-            self._order_by_clause = ClauseList(*util.to_list(order_by))
-        if group_by is not None:
-            self._group_by_clause = ClauseList(*util.to_list(group_by))
+
+    """
 
     def as_scalar(self):
         """return a 'scalar' representation of this selectable, which can be
@@ -1201,18 +1333,6 @@ class SelectBase(Executable, FromClause):
         """
         return ScalarSelect(self)
 
-    @_generative
-    def apply_labels(self):
-        """return a new selectable with the 'use_labels' flag set to True.
-
-        This will result in column expressions being generated using labels
-        against their table name, such as "SELECT somecolumn AS
-        tablename_somecolumn". This allows selectables which contain multiple
-        FROM clauses to produce a unique set of column names regardless of
-        name conflicts among the individual FROM clauses.
-
-        """
-        self.use_labels = True
 
     def label(self, name):
         """return a 'scalar' representation of this selectable, embedded as a
@@ -1347,12 +1467,13 @@ class SelectBase(Executable, FromClause):
 
     @_generative
     @util.deprecated('0.6',
-                     message=":func:`.autocommit` is deprecated. Use "
-                     ":func:`.Executable.execution_options` with the "
+                     message="``autocommit()`` is deprecated. Use "
+                     ":meth:`.Executable.execution_options` with the "
                      "'autocommit' flag.")
     def autocommit(self):
         """return a new selectable with the 'autocommit' flag set to
-        True."""
+        True.
+        """
 
         self._execution_options = \
             self._execution_options.union({'autocommit': True})
@@ -1365,6 +1486,132 @@ class SelectBase(Executable, FromClause):
         s.__dict__ = self.__dict__.copy()
         s._reset_exported()
         return s
+
+    @property
+    def _from_objects(self):
+        return [self]
+
+class GenerativeSelect(SelectBase):
+    """Base class for SELECT statements where additional elements can be
+    added.
+
+    This serves as the base for :class:`.Select` and :class:`.CompoundSelect`
+    where elements such as ORDER BY, GROUP BY can be added and column rendering
+    can be controlled.  Compare to :class:`.TextAsFrom`, which, while it
+    subclasses :class:`.SelectBase` and is also a SELECT construct, represents
+    a fixed textual string which cannot be altered at this level, only
+    wrapped as a subquery.
+
+    .. versionadded:: 0.9.0 :class:`.GenerativeSelect` was added to
+       provide functionality specific to :class:`.Select` and :class:`.CompoundSelect`
+       while allowing :class:`.SelectBase` to be used for other SELECT-like
+       objects, e.g. :class:`.TextAsFrom`.
+
+    """
+    _order_by_clause = ClauseList()
+    _group_by_clause = ClauseList()
+    _limit = None
+    _offset = None
+    _for_update_arg = None
+
+    def __init__(self,
+            use_labels=False,
+            for_update=False,
+            limit=None,
+            offset=None,
+            order_by=None,
+            group_by=None,
+            bind=None,
+            autocommit=None):
+        self.use_labels = use_labels
+
+        if for_update is not False:
+            self._for_update_arg = ForUpdateArg.parse_legacy_select(for_update)
+
+        if autocommit is not None:
+            util.warn_deprecated('autocommit on select() is '
+                                 'deprecated.  Use .execution_options(a'
+                                 'utocommit=True)')
+            self._execution_options = \
+                self._execution_options.union(
+                  {'autocommit': autocommit})
+        if limit is not None:
+            self._limit = util.asint(limit)
+        if offset is not None:
+            self._offset = util.asint(offset)
+        self._bind = bind
+
+        if order_by is not None:
+            self._order_by_clause = ClauseList(*util.to_list(order_by))
+        if group_by is not None:
+            self._group_by_clause = ClauseList(*util.to_list(group_by))
+
+    @property
+    def for_update(self):
+        """Provide legacy dialect support for the ``for_update`` attribute.
+        """
+        if self._for_update_arg is not None:
+            return self._for_update_arg.legacy_for_update_value
+        else:
+            return None
+
+    @for_update.setter
+    def for_update(self, value):
+        self._for_update_arg = ForUpdateArg.parse_legacy_select(value)
+
+    @_generative
+    def with_for_update(self, nowait=False, read=False, of=None):
+        """Specify a ``FOR UPDATE`` clause for this :class:`.GenerativeSelect`.
+
+        E.g.::
+
+            stmt = select([table]).with_for_update(nowait=True)
+
+        On a database like Postgresql or Oracle, the above would render a
+        statement like::
+
+            SELECT table.a, table.b FROM table FOR UPDATE NOWAIT
+
+        on other backends, the ``nowait`` option is ignored and instead
+        would produce::
+
+            SELECT table.a, table.b FROM table FOR UPDATE
+
+        When called with no arguments, the statement will render with
+        the suffix ``FOR UPDATE``.   Additional arguments can then be
+        provided which allow for common database-specific
+        variants.
+
+        :param nowait: boolean; will render ``FOR UPDATE NOWAIT`` on Oracle and
+         Postgresql dialects.
+
+        :param read: boolean; will render ``LOCK IN SHARE MODE`` on MySQL,
+         ``FOR SHARE`` on Postgresql.  On Postgresql, when combined with
+         ``nowait``, will render ``FOR SHARE NOWAIT``.
+
+        :param of: SQL expression or list of SQL expression elements
+         (typically :class:`.Column` objects or a compatible expression) which
+         will render into a ``FOR UPDATE OF`` clause; supported by PostgreSQL
+         and Oracle.  May render as a table or as a column depending on
+         backend.
+
+        .. versionadded:: 0.9.0
+
+        """
+        self._for_update_arg = ForUpdateArg(nowait=nowait, read=read, of=of)
+
+    @_generative
+    def apply_labels(self):
+        """return a new selectable with the 'use_labels' flag set to True.
+
+        This will result in column expressions being generated using labels
+        against their table name, such as "SELECT somecolumn AS
+        tablename_somecolumn". This allows selectables which contain multiple
+        FROM clauses to produce a unique set of column names regardless of
+        name conflicts among the individual FROM clauses.
+
+        """
+        self.use_labels = True
 
     @_generative
     def limit(self, limit):
@@ -1410,7 +1657,7 @@ class SelectBase(Executable, FromClause):
         The criterion will be appended to any pre-existing ORDER BY criterion.
 
         This is an **in-place** mutation method; the
-        :meth:`~.SelectBase.order_by` method is preferred, as it provides standard
+        :meth:`~.GenerativeSelect.order_by` method is preferred, as it provides standard
         :term:`method chaining`.
 
         """
@@ -1427,7 +1674,7 @@ class SelectBase(Executable, FromClause):
         The criterion will be appended to any pre-existing GROUP BY criterion.
 
         This is an **in-place** mutation method; the
-        :meth:`~.SelectBase.group_by` method is preferred, as it provides standard
+        :meth:`~.GenerativeSelect.group_by` method is preferred, as it provides standard
         :term:`method chaining`.
 
         """
@@ -1438,12 +1685,8 @@ class SelectBase(Executable, FromClause):
                 clauses = list(self._group_by_clause) + list(clauses)
             self._group_by_clause = ClauseList(*clauses)
 
-    @property
-    def _from_objects(self):
-        return [self]
 
-
-class CompoundSelect(SelectBase):
+class CompoundSelect(GenerativeSelect):
     """Forms the basis of ``UNION``, ``UNION ALL``, and other
         SELECT-based set operations.
 
@@ -1495,7 +1738,7 @@ class CompoundSelect(SelectBase):
 
             self.selects.append(s.self_group(self))
 
-        SelectBase.__init__(self, **kwargs)
+        GenerativeSelect.__init__(self, **kwargs)
 
     @classmethod
     def _create_union(cls, *selects, **kwargs):
@@ -1663,7 +1906,7 @@ class CompoundSelect(SelectBase):
         self.selects = [clone(s, **kw) for s in self.selects]
         if hasattr(self, '_col_map'):
             del self._col_map
-        for attr in ('_order_by_clause', '_group_by_clause'):
+        for attr in ('_order_by_clause', '_group_by_clause', '_for_update_arg'):
             if getattr(self, attr) is not None:
                 setattr(self, attr, clone(getattr(self, attr), **kw))
 
@@ -1723,7 +1966,9 @@ class HasPrefixes(object):
         self._prefixes = self._prefixes + tuple(
                             [(_literal_as_text(p), dialect) for p in prefixes])
 
-class Select(HasPrefixes, SelectBase):
+
+
+class Select(HasPrefixes, GenerativeSelect):
     """Represents a ``SELECT`` statement.
 
     """
@@ -1795,7 +2040,7 @@ class Select(HasPrefixes, SelectBase):
           to set the autocommit option.
 
         :param bind=None:
-          an :class:`~.base.Engine` or :class:`~.base.Connection` instance
+          an :class:`~.Engine` or :class:`~.Connection` instance
           to which the
           resulting :class:`.Select` object will be bound.  The :class:`.Select`
           object will otherwise automatically bind to whatever
@@ -1827,17 +2072,23 @@ class Select(HasPrefixes, SelectBase):
           when ``True``, applies ``FOR UPDATE`` to the end of the
           resulting statement.
 
-          Certain database dialects also support
-          alternate values for this parameter:
+          .. deprecated:: 0.9.0 - use :meth:`.GenerativeSelect.with_for_update`
+             to specify the structure of the ``FOR UPDATE`` clause.
 
-          * With the MySQL dialect, the value ``"read"`` translates to
-            ``LOCK IN SHARE MODE``.
-          * With the Oracle and Postgresql dialects, the value ``"nowait"``
-            translates to ``FOR UPDATE NOWAIT``.
-          * With the Postgresql dialect, the values "read" and ``"read_nowait"``
-            translate to ``FOR SHARE`` and ``FOR SHARE NOWAIT``, respectively.
+          ``for_update`` accepts various string values interpreted by
+          specific backends, including:
 
-            .. versionadded:: 0.7.7
+          * ``"read"`` - on MySQL, translates to ``LOCK IN SHARE MODE``;
+            on Postgresql, translates to ``FOR SHARE``.
+          * ``"nowait"`` - on Postgresql and Oracle, translates to
+            ``FOR UPDATE NOWAIT``.
+          * ``"read_nowait"`` - on Postgresql, translates to
+            ``FOR SHARE NOWAIT``.
+
+         .. seealso::
+
+            :meth:`.GenerativeSelect.with_for_update` - improved API for
+            specifying the ``FOR UPDATE`` clause.
 
         :param group_by:
           a list of :class:`.ClauseElement` objects which will comprise the
@@ -1872,7 +2123,7 @@ class Select(HasPrefixes, SelectBase):
           collection of the resulting :class:`.Select` object will use these
           names as well for targeting column members.
 
-          use_labels is also available via the :meth:`~.SelectBase.apply_labels`
+          use_labels is also available via the :meth:`~.GenerativeSelect.apply_labels`
           generative method.
 
         """
@@ -1922,7 +2173,7 @@ class Select(HasPrefixes, SelectBase):
         if prefixes:
             self._setup_prefixes(prefixes)
 
-        SelectBase.__init__(self, **kwargs)
+        GenerativeSelect.__init__(self, **kwargs)
 
     @property
     def _froms(self):
@@ -1936,6 +2187,9 @@ class Select(HasPrefixes, SelectBase):
 
         def add(items):
             for item in items:
+                if item is self:
+                    raise exc.InvalidRequestError(
+                            "select() construct refers to itself as a FROM")
                 if translate and item in translate:
                     item = translate[item]
                 if not seen.intersection(item._cloned_set):
@@ -2132,7 +2386,7 @@ class Select(HasPrefixes, SelectBase):
         # present here.
         self._raw_columns = [clone(c, **kw) for c in self._raw_columns]
         for attr in '_whereclause', '_having', '_order_by_clause', \
-            '_group_by_clause':
+            '_group_by_clause', '_for_update_arg':
             if getattr(self, attr) is not None:
                 setattr(self, attr, clone(getattr(self, attr), **kw))
 
@@ -2516,13 +2770,9 @@ class Select(HasPrefixes, SelectBase):
         :term:`method chaining`.
 
         """
-        self._reset_exported()
-        whereclause = _literal_as_text(whereclause)
 
-        if self._whereclause is not None:
-            self._whereclause = and_(self._whereclause, whereclause)
-        else:
-            self._whereclause = whereclause
+        self._reset_exported()
+        self._whereclause = and_(True_._ifnone(self._whereclause), whereclause)
 
     def append_having(self, having):
         """append the given expression to this select() construct's HAVING
@@ -2535,10 +2785,8 @@ class Select(HasPrefixes, SelectBase):
         :term:`method chaining`.
 
         """
-        if self._having is not None:
-            self._having = and_(self._having, _literal_as_text(having))
-        else:
-            self._having = _literal_as_text(having)
+        self._reset_exported()
+        self._having = and_(True_._ifnone(self._having), having)
 
     def append_from(self, fromclause):
         """append the given FromClause expression to this select() construct's
@@ -2780,12 +3028,58 @@ class Exists(UnaryExpression):
         return e
 
 
+class TextAsFrom(SelectBase):
+    """Wrap a :class:`.TextClause` construct within a :class:`.SelectBase`
+    interface.
+
+    This allows the :class:`.TextClause` object to gain a ``.c`` collection and
+    other FROM-like capabilities such as :meth:`.FromClause.alias`,
+    :meth:`.SelectBase.cte`, etc.
+
+    The :class:`.TextAsFrom` construct is produced via the
+    :meth:`.TextClause.columns` method - see that method for details.
+
+    .. versionadded:: 0.9.0
+
+    .. seealso::
+
+        :func:`.text`
+
+        :meth:`.TextClause.columns`
+
+    """
+    __visit_name__ = "text_as_from"
+
+    _textual = True
+
+    def __init__(self, text, columns):
+        self.element = text
+        self.column_args = columns
+
+    @property
+    def _bind(self):
+        return self.element._bind
+
+    @_generative
+    def bindparams(self, *binds, **bind_as_values):
+        self.element = self.element.bindparams(*binds, **bind_as_values)
+
+    def _populate_column_collection(self):
+        for c in self.column_args:
+            c._make_proxy(self)
+
+    def _copy_internals(self, clone=_clone, **kw):
+        self._reset_exported()
+        self.element = clone(self.element, **kw)
+
+    def _scalar_type(self):
+        return self.column_args[0].type
+
 class AnnotatedFromClause(Annotated):
     def __init__(self, element, values):
         # force FromClause to generate their internal
         # collections into __dict__
         element.c
         Annotated.__init__(self, element, values)
-
 
 

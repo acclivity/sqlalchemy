@@ -1,5 +1,5 @@
 # orm/mapper.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -154,10 +154,10 @@ class Mapper(_InspectionAttr):
                     'alt':my_table.c.some_alt
                 })
 
-        See also:
+        .. seealso::
 
-        :ref:`classical_mapping` - discussion of direct usage of
-        :func:`.mapper`
+            :ref:`classical_mapping` - discussion of direct usage of
+            :func:`.mapper`
 
         :param class\_: The class to be mapped.  When using Declarative,
           this argument is automatically passed as the declared class
@@ -246,9 +246,9 @@ class Mapper(_InspectionAttr):
           is passed automatically as a result of the natural class
           hierarchy of the declared classes.
 
-          See also:
+          .. seealso::
 
-          :ref:`inheritance_toplevel`
+            :ref:`inheritance_toplevel`
 
         :param inherit_condition: For joined table inheritance, a SQL
            expression which will
@@ -292,8 +292,12 @@ class Mapper(_InspectionAttr):
           mapping of the class to an alternate selectable, for loading
           only.
 
-          The ``non_primary`` feature is rarely needed with modern
-          usage.
+          :paramref:`.Mapper.non_primary` is not an often used option, but
+          is useful in some specific :func:`.relationship` cases.
+
+          .. seealso::
+
+              :ref:`relationship_non_primary_mapper`
 
         :param order_by: A single :class:`.Column` or list of :class:`.Column`
            objects for which selection operations should use as the default
@@ -315,10 +319,10 @@ class Mapper(_InspectionAttr):
            emit an UPDATE statement for the dependent columns during a
            primary key change.
 
-           See also:
+           ..seealso::
 
-           :ref:`passive_updates` - description of a similar feature as
-           used with :func:`.relationship`
+               :ref:`passive_updates` - description of a similar feature as
+               used with :func:`.relationship`
 
         :param polymorphic_on: Specifies the column, attribute, or
           SQL expression used to determine the target class for an
@@ -622,7 +626,7 @@ class Mapper(_InspectionAttr):
     def entity(self):
         """Part of the inspection API.
 
-        Returns self.class_.
+        Returns self.class\_.
 
         """
         return self.class_
@@ -642,7 +646,9 @@ class Mapper(_InspectionAttr):
     this :class:`.Mapper` represents.  If this mapper is a
     single-table inheriting mapper, local_table will be ``None``.
 
-    See also :attr:`~.Mapper.mapped_table`.
+    .. seealso::
+
+        :attr:`~.Mapper.mapped_table`.
 
     """
 
@@ -660,7 +666,9 @@ class Mapper(_InspectionAttr):
     subclass.  For single-table inheritance mappers, mapped_table
     references the base table.
 
-    See also :attr:`~.Mapper.local_table`.
+    .. seealso::
+
+        :attr:`~.Mapper.local_table`.
 
     """
 
@@ -679,7 +687,9 @@ class Mapper(_InspectionAttr):
     This is a *read only* attribute determined during mapper construction.
     Behavior is undefined if directly modified.
 
-    See also :func:`.configure_mappers`.
+    .. seealso::
+
+        :func:`.configure_mappers`.
 
     """
 
@@ -1103,11 +1113,10 @@ class Mapper(_InspectionAttr):
                     self._reconstructor = method
                     event.listen(manager, 'load', _event_on_load, raw=True)
                 elif hasattr(method, '__sa_validators__'):
-                    include_removes = getattr(method,
-                                            "__sa_include_removes__", False)
+                    validation_opts = method.__sa_validation_opts__
                     for name in method.__sa_validators__:
                         self.validators = self.validators.union(
-                            {name: (method, include_removes)}
+                            {name: (method, validation_opts)}
                         )
 
         manager.info[_INSTRUMENTOR] = self
@@ -1977,10 +1986,10 @@ class Mapper(_InspectionAttr):
         """Return a namespace of all :class:`.SynonymProperty`
         properties maintained by this :class:`.Mapper`.
 
-        See also:
+        .. seealso::
 
-        :attr:`.Mapper.attrs` - namespace of all :class:`.MapperProperty`
-        objects.
+            :attr:`.Mapper.attrs` - namespace of all :class:`.MapperProperty`
+            objects.
 
         """
         return self._filter_properties(properties.SynonymProperty)
@@ -1990,10 +1999,10 @@ class Mapper(_InspectionAttr):
         """Return a namespace of all :class:`.ColumnProperty`
         properties maintained by this :class:`.Mapper`.
 
-        See also:
+        .. seealso::
 
-        :attr:`.Mapper.attrs` - namespace of all :class:`.MapperProperty`
-        objects.
+            :attr:`.Mapper.attrs` - namespace of all :class:`.MapperProperty`
+            objects.
 
         """
         return self._filter_properties(properties.ColumnProperty)
@@ -2003,10 +2012,10 @@ class Mapper(_InspectionAttr):
         """Return a namespace of all :class:`.RelationshipProperty`
         properties maintained by this :class:`.Mapper`.
 
-        See also:
+        .. seealso::
 
-        :attr:`.Mapper.attrs` - namespace of all :class:`.MapperProperty`
-        objects.
+            :attr:`.Mapper.attrs` - namespace of all :class:`.MapperProperty`
+            objects.
 
         """
         return self._filter_properties(properties.RelationshipProperty)
@@ -2016,10 +2025,10 @@ class Mapper(_InspectionAttr):
         """Return a namespace of all :class:`.CompositeProperty`
         properties maintained by this :class:`.Mapper`.
 
-        See also:
+        .. seealso::
 
-        :attr:`.Mapper.attrs` - namespace of all :class:`.MapperProperty`
-        objects.
+            :attr:`.Mapper.attrs` - namespace of all :class:`.MapperProperty`
+            objects.
 
         """
         return self._filter_properties(properties.CompositeProperty)
@@ -2201,10 +2210,11 @@ class Mapper(_InspectionAttr):
         """Return an identity-map key for use in storing/retrieving an
         item from the identity map.
 
-        row
-          A ``sqlalchemy.engine.RowProxy`` instance or a
-          dictionary corresponding result-set ``ColumnElement``
-          instances to their values within a row.
+        :param row: A :class:`.RowProxy` instance.  The columns which are mapped
+         by this :class:`.Mapper` should be locatable in the row, preferably
+         via the :class:`.Column` object directly (as is the case when a
+         :func:`.select` construct is executed), or via string names of the form
+         ``<tablename>_<colname>``.
 
         """
         pk_cols = self.primary_key
@@ -2218,8 +2228,7 @@ class Mapper(_InspectionAttr):
         """Return an identity-map key for use in storing/retrieving an
         item from an identity map.
 
-        primary_key
-          A list of values indicating the identifier.
+        :param primary_key: A list of values indicating the identifier.
 
         """
         return self._identity_class, tuple(primary_key)
@@ -2227,6 +2236,11 @@ class Mapper(_InspectionAttr):
     def identity_key_from_instance(self, instance):
         """Return the identity key for the given instance, based on
         its primary key attributes.
+
+        If the instance's state is expired, calling this method
+        will result in a database check to see if the object has been deleted.
+        If the row no longer exists,
+        :class:`~sqlalchemy.orm.exc.ObjectDeletedError` is raised.
 
         This value is typically also found on the instance state under the
         attribute name `key`.
@@ -2247,6 +2261,11 @@ class Mapper(_InspectionAttr):
     def primary_key_from_instance(self, instance):
         """Return the list of primary key values for the given
         instance.
+
+        If the instance's state is expired, calling this method
+        will result in a database check to see if the object has been deleted.
+        If the row no longer exists,
+        :class:`~sqlalchemy.orm.exc.ObjectDeletedError` is raised.
 
         """
         state = attributes.instance_state(instance)
@@ -2473,7 +2492,9 @@ class Mapper(_InspectionAttr):
             for m in self.iterate_to_root():
                 if m._inherits_equated_pairs and \
                     cols.intersection(
-                        [l for l, r in m._inherits_equated_pairs]):
+                      util.reduce(set.union,
+                          [l.proxy_set for l, r in m._inherits_equated_pairs])
+                      ):
                     result[table].append((m, m._inherits_equated_pairs))
 
         return result
@@ -2491,7 +2512,6 @@ def configure_mappers():
     if not Mapper._new_mappers:
         return
 
-    _call_configured = None
     _CONFIGURE_MUTEX.acquire()
     try:
         global _already_compiling
@@ -2504,10 +2524,12 @@ def configure_mappers():
             if not Mapper._new_mappers:
                 return
 
+            Mapper.dispatch(Mapper).before_configured()
             # initialize properties on all mappers
             # note that _mapper_registry is unordered, which
             # may randomly conceal/reveal issues related to
             # the order of mapper compilation
+
             for mapper in list(_mapper_registry):
                 if getattr(mapper, '_configure_failed', False):
                     e = sa_exc.InvalidRequestError(
@@ -2523,7 +2545,6 @@ def configure_mappers():
                         mapper._expire_memoizations()
                         mapper.dispatch.mapper_configured(
                                 mapper, mapper.class_)
-                        _call_configured = mapper
                     except:
                         exc = sys.exc_info()[1]
                         if not hasattr(exc, '_configure_failed'):
@@ -2535,8 +2556,7 @@ def configure_mappers():
             _already_compiling = False
     finally:
         _CONFIGURE_MUTEX.release()
-    if _call_configured is not None:
-        _call_configured.dispatch.after_configured()
+    Mapper.dispatch(Mapper).after_configured()
 
 
 def reconstructor(fn):
@@ -2582,13 +2602,28 @@ def validates(*names, **kw):
      argument "is_remove" which will be a boolean.
 
      .. versionadded:: 0.7.7
+    :param include_backrefs: defaults to ``True``; if ``False``, the
+     validation function will not emit if the originator is an attribute
+     event related via a backref.  This can be used for bi-directional
+     :func:`.validates` usage where only one validator should emit per
+     attribute operation.
+
+     .. versionadded:: 0.9.0
+
+    .. seealso::
+
+      :ref:`simple_validators` - usage examples for :func:`.validates`
 
     """
     include_removes = kw.pop('include_removes', False)
+    include_backrefs = kw.pop('include_backrefs', True)
 
     def wrap(fn):
         fn.__sa_validators__ = names
-        fn.__sa_include_removes__ = include_removes
+        fn.__sa_validation_opts__ = {
+                  "include_removes": include_removes,
+                  "include_backrefs": include_backrefs
+                }
         return fn
     return wrap
 

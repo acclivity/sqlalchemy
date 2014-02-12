@@ -1,3 +1,5 @@
+"""Versioned mixin class and other utilities."""
+
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.orm import mapper, class_mapper, attributes, object_mapper
 from sqlalchemy.orm.exc import UnmappedClassError, UnmappedColumnError
@@ -25,6 +27,7 @@ def _history_mapper(local_mapper):
 
     polymorphic_on = None
     super_fks = []
+
     if not super_mapper or local_mapper.local_table is not super_mapper.local_table:
         cols = []
         for column in local_mapper.local_table.c:
@@ -43,7 +46,7 @@ def _history_mapper(local_mapper):
                 polymorphic_on = col
 
         if super_mapper:
-            super_fks.append(('version', super_history_mapper.base_mapper.local_table.c.version))
+            super_fks.append(('version', super_history_mapper.local_table.c.version))
             cols.append(Column('version', Integer, primary_key=True, autoincrement=False))
         else:
             cols.append(Column('version', Integer, primary_key=True, autoincrement=False))
@@ -157,7 +160,8 @@ def create_version(obj, session, deleted = False):
         # check those too
         for prop in obj_mapper.iterate_properties:
             if isinstance(prop, RelationshipProperty) and \
-                attributes.get_history(obj, prop.key).has_changes():
+                attributes.get_history(obj, prop.key,
+                        passive=attributes.PASSIVE_NO_INITIALIZE).has_changes():
                 for p in prop.local_columns:
                     if p.foreign_keys:
                         obj_changed = True

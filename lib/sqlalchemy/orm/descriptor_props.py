@@ -1,5 +1,5 @@
 # orm/descriptor_props.py
-# Copyright (C) 2005-2013 the SQLAlchemy authors and contributors <see AUTHORS file>
+# Copyright (C) 2005-2014 the SQLAlchemy authors and contributors <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -16,6 +16,7 @@ from . import attributes
 from .. import util, sql, exc as sa_exc, event, schema
 from ..sql import expression
 from . import properties
+from . import query
 
 
 class DescriptorProperty(MapperProperty):
@@ -83,9 +84,9 @@ class CompositeProperty(DescriptorProperty):
     :class:`.CompositeProperty` is constructed using the :func:`.composite`
     function.
 
-    See also:
+    .. seealso::
 
-    :ref:`mapper_composite`
+        :ref:`mapper_composite`
 
     """
     def __init__(self, class_, *attrs, **kwargs):
@@ -154,6 +155,7 @@ class CompositeProperty(DescriptorProperty):
         util.set_creation_order(self)
         self._create_descriptor()
 
+
     def instrument_class(self, mapper):
         super(CompositeProperty, self).instrument_class(mapper)
         self._setup_event_handlers()
@@ -163,7 +165,6 @@ class CompositeProperty(DescriptorProperty):
         has been associated with its parent mapper.
 
         """
-        self._init_props()
         self._setup_arguments_on_columns()
 
     def _create_descriptor(self):
@@ -234,16 +235,23 @@ class CompositeProperty(DescriptorProperty):
             for prop in self.props
         ]
 
-    def _init_props(self):
-        self.props = props = []
+    @util.memoized_property
+    def props(self):
+        props = []
         for attr in self.attrs:
             if isinstance(attr, str):
-                prop = self.parent.get_property(attr)
+                prop = self.parent.get_property(attr, _configure_mappers=False)
             elif isinstance(attr, schema.Column):
                 prop = self.parent._columntoproperty[attr]
             elif isinstance(attr, attributes.InstrumentedAttribute):
                 prop = attr.property
+            else:
+                raise sa_exc.ArgumentError(
+                        "Composite expects Column objects or mapped "
+                        "attributes/attribute names as arguments, got: %r"
+                        % (attr,))
             props.append(prop)
+        return props
 
     @property
     def columns(self):
@@ -259,7 +267,8 @@ class CompositeProperty(DescriptorProperty):
             if self.deferred:
                 prop.deferred = self.deferred
                 prop.strategy_class = prop._strategy_lookup(
-                                        deferred=True, instrument=True)
+                                                ("deferred", True),
+                                                ("instrument", True))
             prop.group = self.group
 
     def _setup_event_handlers(self):
@@ -354,6 +363,18 @@ class CompositeProperty(DescriptorProperty):
     def _comparator_factory(self, mapper):
         return self.comparator_factory(self, mapper)
 
+    class CompositeBundle(query.Bundle):
+        def __init__(self, property, expr):
+            self.property = property
+            super(CompositeProperty.CompositeBundle, self).__init__(
+                        property.key, *expr)
+
+        def create_row_processor(self, query, procs, labels):
+            def proc(row, result):
+                return self.property.composite_class(*[proc(row, result) for proc in procs])
+            return proc
+
+
     class Comparator(PropComparator):
         """Produce boolean, comparison, and other operators for
         :class:`.CompositeProperty` attributes.
@@ -373,10 +394,18 @@ class CompositeProperty(DescriptorProperty):
 
         """
 
+
+        __hash__ = None
+
+        @property
+        def clauses(self):
+            return self.__clause_element__()
+
         def __clause_element__(self):
             return expression.ClauseList(group=False, *self._comparable_elements)
 
-        __hash__ = None
+        def _query_clause_element(self):
+            return CompositeProperty.CompositeBundle(self.prop, self.__clause_element__())
 
         @util.memoized_property
         def _comparable_elements(self):
@@ -465,40 +494,57 @@ class SynonymProperty(DescriptorProperty):
     def __init__(self, name, map_column=None,
                             descriptor=None, comparator_factory=None,
                             doc=None):
-        """Denote an attribute name as a synonym to a mapped property.
+        """Denote an attribute name as a synonym to a mapped property,
+        in that the attribute will mirror the value and expression behavior
+        of another attribute.
 
-        .. versionchanged:: 0.7
-            :func:`.synonym` is superseded by the :mod:`~sqlalchemy.ext.hybrid`
-            extension.  See  the documentation for hybrids
-            at :ref:`hybrids_toplevel`.
+        :param name: the name of the existing mapped property.  This
+          can refer to the string name of any :class:`.MapperProperty`
+          configured on the class, including column-bound attributes
+          and relationships.
 
-        Used with the ``properties`` dictionary sent to
-        :func:`~sqlalchemy.orm.mapper`::
+        :param descriptor: a Python :term:`descriptor` that will be used
+          as a getter (and potentially a setter) when this attribute is
+          accessed at the instance level.
 
-            class MyClass(object):
-                def _get_status(self):
-                    return self._status
-                def _set_status(self, value):
-                    self._status = value
-                status = property(_get_status, _set_status)
+        :param map_column: if ``True``, the :func:`.synonym` construct will
+          locate the existing named :class:`.MapperProperty` based on the
+          attribute name of this :func:`.synonym`, and assign it to a new
+          attribute linked to the name of this :func:`.synonym`.
+          That is, given a mapping like::
 
-            mapper(MyClass, sometable, properties={
-                "status":synonym("_status", map_column=True)
-            })
+                class MyClass(Base):
+                    __tablename__ = 'my_table'
 
-        Above, the ``status`` attribute of MyClass will produce
-        expression behavior against the table column named ``status``,
-        using the Python attribute ``_status`` on the mapped class
-        to represent the underlying value.
+                    id = Column(Integer, primary_key=True)
+                    job_status = Column(String(50))
 
-        :param name: the name of the existing mapped property, which can be
-          any other ``MapperProperty`` including column-based properties and
-          relationships.
+                    job_status = synonym("_job_status", map_column=True)
 
-        :param map_column: if ``True``, an additional ``ColumnProperty`` is created
-          on the mapper automatically, using the synonym's name as the keyname of
-          the property, and the keyname of this ``synonym()`` as the name of the
-          column to map.
+          The above class ``MyClass`` will now have the ``job_status``
+          :class:`.Column` object mapped to the attribute named ``_job_status``,
+          and the attribute named ``job_status`` will refer to the synonym
+          itself.  This feature is typically used in conjunction with the
+          ``descriptor`` argument in order to link a user-defined descriptor
+          as a "wrapper" for an existing column.
+
+        :param comparator_factory: A subclass of :class:`.PropComparator`
+          that will provide custom comparison behavior at the SQL expression
+          level.
+
+          .. note::
+
+            For the use case of providing an attribute which redefines both
+            Python-level and SQL-expression level behavior of an attribute,
+            please refer to the Hybrid attribute introduced at
+            :ref:`mapper_hybrids` for a more effective technique.
+
+        .. seealso::
+
+            :ref:`synonyms` - examples of functionality.
+
+            :ref:`mapper_hybrids` - Hybrids provide a better approach for
+            more complicated attribute-wrapping schemes than synonyms.
 
         """
 

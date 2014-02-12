@@ -1,3 +1,5 @@
+:orphan:
+
 .. _index_toplevel:
 
 ========================
@@ -37,6 +39,7 @@ of Python objects, proceed first to the tutorial.
   :doc:`Declarative Extension <orm/extensions/declarative>` |
   :doc:`Association Proxy <orm/extensions/associationproxy>` |
   :doc:`Hybrid Attributes <orm/extensions/hybrid>` |
+  :doc:`Automap <orm/extensions/automap>` (**new**) |
   :doc:`Mutable Scalars <orm/extensions/mutable>` |
   :doc:`Ordered List <orm/extensions/orderinglist>`
 
